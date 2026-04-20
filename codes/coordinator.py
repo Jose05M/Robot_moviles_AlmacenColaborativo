@@ -329,7 +329,7 @@ class MissionCoordinator:
 
         self.pb_wait_positions = {
             "pb1": (10.00, 3.5, 0.0),
-            "pb2": (10.00, 3.0, 0.0),
+            "pb2": (11.00, 3.0, 0.0),
             "pb3": (12.00, 3.0, 0.0),
         }
 
