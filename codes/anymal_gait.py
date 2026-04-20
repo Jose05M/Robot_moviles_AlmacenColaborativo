@@ -13,7 +13,11 @@ Este módulo implementa:
 - Integración con WarehouseSim (sim.py) para desplazar la base del robot
 - Logging y graficación de desempeño de la Fase 2
 
-Autor: Tu equipo
+Autores: 
+Josue Ureña Valencia				IRS | A01738940
+César Arellano Arellano			    IRS | A00839373
+Jose Eduardo Sanchez Martinez		IRS | A01738476
+Rafael André Gamiz Salazar			IRS | A00838280
 Curso: TE3002B - Robots Móviles Terrestres
 """
 

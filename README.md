@@ -52,8 +52,6 @@ Este archivo coordina toda la misión en 3 fases:
 
    * Apila cajas en orden: C (abajo), B (medio), A (arriba)
 
-👉 Aquí se llaman los controladores de cada robot.
-
 ---
 
 # Requisitos
