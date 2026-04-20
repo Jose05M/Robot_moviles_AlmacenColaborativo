@@ -26,7 +26,11 @@ Este módulo incluye:
     - trayectoria cartesiana simple para grasp_box
     - utilidades de demo y plots
 
-Autor: Tu equipo
+Autores: 
+Josue Ureña Valencia				IRS | A01738940
+César Arellano Arellano			    IRS | A00839373
+Jose Eduardo Sanchez Martinez		IRS | A01738476
+Rafael André Gamiz Salazar			IRS | A00838280
 Curso: TE3002B - Robots Móviles Terrestres
 """
 
