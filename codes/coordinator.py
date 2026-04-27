@@ -41,6 +41,7 @@ from typing import Dict, List, Optional, Tuple
 import math
 import numpy as np
 import matplotlib.pyplot as plt
+from sklearn.linear_model import LogisticRegression
 
 from sim import WarehouseSim, distance, wrap_angle, clamp
 from husky_pusher import HuskyPusher, plot_husky_phase_results, plot_husky_demo_style
@@ -292,6 +293,11 @@ class MissionCoordinator:
         self.husky_log = None
         self.anymal_log = None
 
+        self._set_box_world_center("A", 10.5, 1.3)
+        self._set_box_world_center("B", 11.5, 1.1)
+        self._set_box_world_center("C", 12.5, 1.3)
+        
+
         # Controladores de las primeras dos fases
         self.husky_controller = HuskyPusher(sim=self.sim, terrain="grass")
         self.anymal_controller = ANYmalGaitController(sim=self.sim)
@@ -328,9 +334,9 @@ class MissionCoordinator:
         }
 
         self.pb_wait_positions = {
-            "pb1": (10.00, 3.5, 0.0),
-            "pb2": (11.00, 3.0, 0.0),
-            "pb3": (12.00, 3.0, 0.0),
+            "pb1": (10.0, 4.0, 0.0),
+            "pb2": (10.0, 3.25, 0.0),
+            "pb3": (10.0, 2.5, 0.0),
         }
 
         # Logs por grasp
@@ -346,6 +352,53 @@ class MissionCoordinator:
             1: 0.165,   # B en medio
             2: 0.195,   # A arriba
         }
+        self.train_collision_model()
+        self.avoid_dir = {name: 1 for name in self.pb_names}
+        self.pb_status = {name: "IDLE" for name in self.pb_names}
+
+    def train_collision_model(self):
+        # Features: [distancia, diferencia_vel, diferencia_angulo]
+        X = np.array([
+            [0.1, 0.5, 0.2],
+            [0.2, 0.4, 0.3],
+            [0.5, 0.2, 0.1],
+            [1.0, 0.1, 0.05],
+            [0.15, 0.6, 0.4],
+            [0.8, 0.1, 0.1]
+        ])
+
+        # 1 = alto riesgo, 0 = bajo
+        y = np.array([1, 1, 0, 0, 1, 0])
+
+        model = LogisticRegression()
+        model.fit(X, y)
+
+        self.collision_model = model
+
+    def collision_risk(self, robot1, robot2):
+
+        x1, y1, th1 = self.pb_mobile[robot1].get_pose()
+        x2, y2, th2 = self.pb_mobile[robot2].get_pose()
+
+        # distancia
+        dist = math.hypot(x1 - x2, y1 - y2)
+
+        # velocidades
+        log1 = self.pb_mobile[robot1].motion_log
+        log2 = self.pb_mobile[robot2].motion_log
+
+        v1 = log1['v'][-1] if log1['v'] else 0.0
+        v2 = log2['v'][-1] if log2['v'] else 0.0
+
+        dv = abs(v1 - v2)
+
+        # orientación
+        dtheta = abs(wrap_angle(th1 - th2))
+
+        X = np.array([[dist, dv, dtheta]])
+        risk = self.collision_model.predict(X)[0]
+
+        return risk  # 0 o 1
 
     def _send_other_puzzlebots_to_wait(self, active_robot: str) -> None:
         """
@@ -353,7 +406,12 @@ class MissionCoordinator:
         para que no invadan la trayectoria del robot activo.
         """
         for robot_name in self.pb_names:
+
             if robot_name == active_robot:
+                continue
+
+            # 🔥 NO mover robots que ya terminaron
+            if self.pb_status.get(robot_name) == "DONE":
                 continue
 
             gx, gy, gtheta = self.pb_wait_positions[robot_name]
@@ -483,16 +541,146 @@ class MissionCoordinator:
     
     def _navigate_robot_to(self, robot_name: str, gx: float, gy: float, gtheta: Optional[float] = None,
                             phase_note: str = "", max_steps: int = 500) -> None:
+
         controller = self.pb_mobile[robot_name]
+        if self.pb_status.get(robot_name) == "DONE":
+            return
+
         for _ in range(max_steps):
-            done = controller.step_to_pose(gx, gy, gtheta)
+
+            x, y, theta = controller.get_pose()
+
+            # ======================================================
+            # 1. DIRECCIÓN AL OBJETIVO
+            # ======================================================
+            dx = gx - x
+            dy = gy - y
+
+            dist_goal = math.hypot(dx, dy)
+
+            dir_goal_x, dir_goal_y = 0.0, 0.0
+            if dist_goal > 1e-6:
+                dir_goal_x = dx / dist_goal
+                dir_goal_y = dy / dist_goal
+
+            # ======================================================
+            # 2. FUERZA DE EVASIÓN (ROBOTS + CAJAS)
+            # ======================================================
+            avoid_x = 0.0
+            avoid_y = 0.0
+
+            # -------- ROBOTS --------
+            for other in self.pb_names:
+                if other == robot_name:
+                    continue
+
+                x2, y2, _ = self.pb_mobile[other].get_pose()
+
+                dist = math.hypot(x - x2, y - y2)
+
+                d_safe = 0.6
+                d_crit = 0.25
+
+                if dist < d_safe:
+                    # riesgo continuo
+                    risk = (d_safe - dist) / (d_safe - d_crit)
+                    risk = np.clip(risk, 0.0, 1.0)
+
+                    # dirección de repulsión
+                    rx = x - x2
+                    ry = y - y2
+
+                    norm = math.hypot(rx, ry)
+                    if norm > 1e-6:
+                        rx /= norm
+                        ry /= norm
+
+                        avoid_x += risk * rx
+                        avoid_y += risk * ry
+
+                    print(f"[ML] {robot_name} evita robot {other} | risk={risk:.2f}")
+
+            # -------- CAJAS --------
+            for box_name, box in self.sim.boxes.items():
+
+                if getattr(box, "stacked", False):
+                    continue
+
+                bx, by = box.center()
+                dist = math.hypot(x - bx, y - by)
+
+                d_safe = 0.5
+                d_crit = 0.2
+
+                if dist < d_safe:
+                    risk = (d_safe - dist) / (d_safe - d_crit)
+                    risk = np.clip(risk, 0.0, 1.0)
+
+                    rx = x - bx
+                    ry = y - by
+
+                    norm = math.hypot(rx, ry)
+                    if norm > 1e-6:
+                        rx /= norm
+                        ry /= norm
+
+                        avoid_x += risk * rx
+                        avoid_y += risk * ry
+
+                    print(f"[ML] {robot_name} evita caja {box_name} | risk={risk:.2f}")
+
+            # normalizar evasión
+            norm_avoid = math.hypot(avoid_x, avoid_y)
+            if norm_avoid > 1e-6:
+                avoid_x /= norm_avoid
+                avoid_y /= norm_avoid
+
+            # ======================================================
+            # 3. MEZCLA (CLAVE)
+            # ======================================================
+            # si no hay riesgo → puro goal
+            if norm_avoid < 1e-6:
+                mix_x = dir_goal_x
+                mix_y = dir_goal_y
+            else:
+                # peso dinámico
+                alpha = 0.7   # hacia goal
+
+                # si está muy cerca del objetivo → menos evasión
+                if dist_goal < 0.5:
+                    alpha = 1.0
+                    avoid_x = 0.0
+                    avoid_y = 0.0
+
+                mix_x = alpha * dir_goal_x + (1 - alpha) * avoid_x
+                mix_y = alpha * dir_goal_y + (1 - alpha) * avoid_y
+
+                norm_mix = math.hypot(mix_x, mix_y)
+                if norm_mix > 1e-6:
+                    mix_x /= norm_mix
+                    mix_y /= norm_mix
+
+            # ======================================================
+            # 4. PASO CORTO (evita curvas grandes)
+            # ======================================================
+            step_size = 0.25
+
+            gx_new = x + mix_x * step_size
+            gy_new = y + mix_y * step_size
+
+            # ======================================================
+            # 5. MOVIMIENTO
+            # ======================================================
+            done = controller.step_to_pose(gx_new, gy_new, None)
+
             self.sim.step(
                 phase="puzzlebot",
-                note=f"{robot_name} navegando | {phase_note}"
+                note=f"{robot_name} navegando suave | {phase_note}"
             )
+
             if done:
                 break
-
+            
     def _move_box_with_robot(self, robot_name: str, box_name: str,
                             target_x: float, target_y: float,
                             level: int) -> None:
@@ -503,24 +691,44 @@ class MissionCoordinator:
 
         # Waypoint intermedio común para entrar ordenadamente al área de la pila
         # y luego aproximarse desde su lado correspondiente
+        # posición actual del robot
+        x, y, _ = controller.get_pose()
+
+        # punto de stack final
+        gx, gy, gth = self.place_standoff_positions[robot_name]
+
+        # vector hacia el stack
+        dx = gx - x
+        dy = gy - y
+        dist = math.hypot(dx, dy)
+
+        if dist > 1e-6:
+            dx /= dist
+            dy /= dist
+
+        # 🔥 offset lateral (lado de entrada)
+        side_offset = 0.35
+
+        # perpendicular
+        px = -dy
+        py = dx
+
+        # elegir lado según robot
         if robot_name == "pb1":
-            # arriba
-            waypoints = [
-                (10.80, 2.55, 0.0),
-                (gx, gy, gth),
-            ]
+            side = 1   # arriba
         elif robot_name == "pb2":
-            # izquierda
-            waypoints = [
-                (10.45, 1.75, 0.0),
-                (gx, gy, gth),
-            ]
+            side = -1  # izquierda
         else:
-            # pb3 abajo
-            waypoints = [
-                (10.80, 1.05, 0.0),
-                (gx, gy, gth),
-            ]
+            side = 1   # abajo
+
+        # waypoint dinámico
+        wx = gx + side * px * side_offset
+        wy = gy + side * py * side_offset
+
+        waypoints = [
+            (wx, wy, None),
+            (gx, gy, gth),
+        ]
 
         for wp_x, wp_y, wp_th in waypoints:
             for _ in range(250):
@@ -564,6 +772,7 @@ class MissionCoordinator:
         Ejecuta una tarea individual de apilado para un PuzzleBot ya desplegado
         en la zona de trabajo.
         """
+        self.pb_status[robot_name] = "ACTIVE"
         # Mandar a los otros robots a esperar antes de que este empiece
         self._send_other_puzzlebots_to_wait(active_robot=robot_name)
 
@@ -624,6 +833,7 @@ class MissionCoordinator:
             phase="puzzlebot",
             note=f"{robot_name} aplicó tau=J^T f para colocar {box_name}"
         )
+        self.pb_status[robot_name] = "DONE"
 
     def run_puzzlebot_phase(self, verbose: bool = True) -> None:
         """
