@@ -1,29 +1,24 @@
 """
 anymal_gait.py
 --------------
-Generador de marcha trote para el ANYmal dentro del mini reto.
+Trot gait generator for the ANYmal within the mini challenge.
 
-Este módulo implementa:
-- Modelo cinemático de una pata ANYmal (FK, IK, Jacobiano)
-- Modelo simplificado del ANYmal completo con 4 patas
-- Generación de trayectoria cartesiana de cada pie
-- Marcha trote: patas diagonales en fase
-- Monitoreo del determinante del Jacobiano en cada pata
-- Estrategia simple de evitación de singularidades
-- Integración con WarehouseSim (sim.py) para desplazar la base del robot
-- Logging y graficación de desempeño de la Fase 2
+This module implements:
+- Kinematic model of an ANYmal leg (FK, IK, Jacobian)
+- Simplified model of the full ANYmal with 4 legs
+- Cartesian trajectory generation for each foot
+- Trot gait: diagonal legs in phase
+- Monitoring of the Jacobian determinant on each leg
+- Simple singularity avoidance strategy
+- Integration with WarehouseSim (sim.py) to move the robot base
+- Logging and plotting of Phase 2 performance
 
-Autores: 
-Josue Ureña Valencia				IRS | A01738940
-César Arellano Arellano			    IRS | A00839373
-Jose Eduardo Sanchez Martinez		IRS | A01738476
-Rafael André Gamiz Salazar			IRS | A00838280
-Curso: TE3002B - Robots Móviles Terrestres
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Dict, List, Tuple, Optional
 import math
 import numpy as np
@@ -31,23 +26,26 @@ import matplotlib.pyplot as plt
 
 from sim import WarehouseSim, wrap_angle, distance, clamp
 
+PLOTS_DIR = Path(__file__).resolve().parent.parent / "plots"
+PLOTS_DIR.mkdir(parents=True, exist_ok=True)
+
 
 # =============================================================================
-# Pata del ANYmal
+# ANYmal leg
 # =============================================================================
 
 class ANYmalLeg:
     """
-    Modelo cinemático de una pata del ANYmal con 3 DoF:
+    Kinematic model of an ANYmal leg with 3 DoF:
         q1 = HAA
         q2 = HFE
         q3 = KFE
 
-    Convenciones:
-        x: adelante
+    Conventions:
+        x: forward
         y: lateral
-        z: arriba
-        side = +1 patas izquierdas, -1 patas derechas
+        z: up
+        side = +1 left legs, -1 right legs
     """
 
     def __init__(self, name: str, l0: float = 0.0585, l1: float = 0.35, l2: float = 0.33, side: int = +1):
@@ -59,13 +57,13 @@ class ANYmalLeg:
 
         self.q = np.zeros(3)
 
-        # Límites suaves de seguridad
+        # Soft safety limits
         self.q_min = np.array([-0.72, -1.8, -2.69], dtype=float)
         self.q_max = np.array([+0.49, +1.8, -0.03], dtype=float)
 
     def forward_kinematics(self, q: Optional[np.ndarray] = None) -> np.ndarray:
         """
-        FK analítica:
+        Analytical FK:
             q -> p = [x, y, z]
         """
         if q is not None:
@@ -81,25 +79,25 @@ class ANYmalLeg:
 
     def inverse_kinematics(self, p_des: np.ndarray) -> np.ndarray:
         """
-        IK geométrica cerrada para la pata.
+        Closed-form geometric IK for the leg.
 
-        Configuración:
-            rodilla hacia atrás => q3 < 0
+        Configuration:
+            knee bent backward => q3 < 0
         """
         x, y, z = map(float, p_des)
 
-        # Resolver q1 por proyección lateral
+        # Solve q1 via lateral projection
         r_yz_sq = y**2 + z**2 - self.l0**2
         r_yz = math.sqrt(max(r_yz_sq, 1e-9))
         q1 = math.atan2(y, -z) - math.atan2(self.side * self.l0, r_yz)
 
-        # Resolver q3 con ley de cosenos
+        # Solve q3 with the law of cosines
         r_sq = x**2 + z**2
         D = (r_sq - self.l1**2 - self.l2**2) / (2.0 * self.l1 * self.l2)
         D = clamp(D, -1.0, 1.0)
         q3 = -math.acos(D)
 
-        # Resolver q2
+        # Solve q2
         alpha = math.atan2(x, -z)
         beta = math.atan2(self.l2 * math.sin(-q3),
                           self.l1 + self.l2 * math.cos(q3))
@@ -111,7 +109,7 @@ class ANYmalLeg:
 
     def jacobian(self, q: Optional[np.ndarray] = None) -> np.ndarray:
         """
-        Jacobiano analítico 3x3.
+        Analytical 3x3 Jacobian.
         """
         if q is None:
             q = self.q
@@ -134,24 +132,24 @@ class ANYmalLeg:
         return J
 
     def det_jacobian(self, q: Optional[np.ndarray] = None) -> float:
-        """Determinante del Jacobiano."""
+        """Jacobian determinant."""
         return float(np.linalg.det(self.jacobian(q)))
 
     def is_singular(self, q: Optional[np.ndarray] = None, tol: float = 1e-3) -> bool:
-        """True si está cerca de singularidad."""
+        """True if near a singularity."""
         return abs(self.det_jacobian(q)) < tol
 
 
 # =============================================================================
-# Robot ANYmal completo
+# Full ANYmal robot
 # =============================================================================
 
 class ANYmal:
     """
-    Modelo simplificado del ANYmal:
-    - 4 patas
-    - base flotante 2D en el mundo del almacén
-    - articulaciones internas para la marcha
+    Simplified ANYmal model:
+    - 4 legs
+    - 2D floating base in the warehouse world
+    - internal joints for the gait
     """
 
     LEG_NAMES = ["LF", "RF", "LH", "RH"]
@@ -164,54 +162,54 @@ class ANYmal:
             "RH": ANYmalLeg("RH", side=-1),
         }
 
-        # Estado de base simplificada
+        # Simplified base state
         self.base_x = 0.0
         self.base_y = 0.0
         self.base_theta = 0.0
 
-        # Payload aproximado pedido en el reto
+        # Approximate payload requested in the challenge
         self.payload_mass = 6.0
 
-        # Postura nominal articular
+        # Nominal joint posture
         self.q_nominal_leg = np.array([0.0, 0.70, -1.40], dtype=float)
 
     def set_base_pose(self, x: float, y: float, theta: float) -> None:
-        """Actualiza la pose de la base."""
+        """Updates the base pose."""
         self.base_x = x
         self.base_y = y
         self.base_theta = wrap_angle(theta)
 
     def get_base_pose(self) -> Tuple[float, float, float]:
-        """Retorna pose de la base."""
+        """Returns the base pose."""
         return self.base_x, self.base_y, self.base_theta
 
     def get_all_joint_angles(self) -> np.ndarray:
-        """Concatena los 12 ángulos articulares."""
+        """Concatenates the 12 joint angles."""
         return np.concatenate([self.legs[name].q for name in self.LEG_NAMES])
 
     def set_all_joint_angles(self, q12: np.ndarray) -> None:
-        """Asigna los 12 ángulos articulares."""
+        """Sets the 12 joint angles."""
         q12 = np.asarray(q12, dtype=float)
-        assert q12.shape == (12,), f"Se esperaban 12 ángulos, llegó {q12.shape}"
+        assert q12.shape == (12,), f"Expected 12 angles, got {q12.shape}"
         for i, name in enumerate(self.LEG_NAMES):
             self.legs[name].q = q12[3 * i: 3 * (i + 1)].copy()
 
     def get_all_foot_positions(self) -> Dict[str, np.ndarray]:
-        """Posiciones de pie de las 4 patas en sus marcos locales."""
+        """Foot positions of the 4 legs in their local frames."""
         return {name: self.legs[name].forward_kinematics() for name in self.LEG_NAMES}
 
     def get_all_detJ(self) -> Dict[str, float]:
-        """Determinante del Jacobiano por pata."""
+        """Jacobian determinant per leg."""
         return {name: self.legs[name].det_jacobian() for name in self.LEG_NAMES}
 
 
 # =============================================================================
-# Log de la fase ANYmal
+# ANYmal phase log
 # =============================================================================
 
 @dataclass
 class ANYmalLog:
-    """Log detallado de la marcha del ANYmal."""
+    """Detailed log of the ANYmal gait."""
     t: List[float] = field(default_factory=list)
 
     base_x: List[float] = field(default_factory=list)
@@ -249,7 +247,7 @@ class ANYmalLog:
         phase_name: str,
         singularity_violation: bool
     ) -> None:
-        """Agrega una muestra al log."""
+        """Appends a sample to the log."""
         bx, by, bth = base_pose
 
         self.t.append(t)
@@ -271,32 +269,32 @@ class ANYmalLog:
 
 
 # =============================================================================
-# Generador de marcha trote
+# Trot gait generator
 # =============================================================================
 
 class ANYmalGaitController:
     """
-    Controlador de marcha trote para la Fase 2.
+    Trot gait controller for Phase 2.
 
-    Objetivos:
-    - Desplazar al ANYmal desde su posición inicial a p_destino
-    - Generar trayectorias cartesianas de pie
-    - Resolver IK por pata
-    - Monitorear det(J)
-    - Evitar singularidades reduciendo la amplitud de swing si es necesario
+    Goals:
+    - Move the ANYmal from its initial position to p_destino
+    - Generate cartesian foot trajectories
+    - Solve IK per leg
+    - Monitor det(J)
+    - Avoid singularities by reducing swing amplitude if needed
     """
 
     def __init__(self, sim: WarehouseSim):
         self.sim = sim
         self.anymal = ANYmal()
 
-        # Sincronizar base con el mundo
+        # Sync base with the world
         robot = self.sim.robots["anymal"]
         self.anymal.set_base_pose(robot.x, robot.y, robot.theta)
 
         self.log = ANYmalLog()
 
-        # Parámetros de gait
+        # Gait parameters
         self.period = 0.65               # s
         self.step_height = 0.05          # m
         self.step_length = 0.1         # m
@@ -307,7 +305,7 @@ class ANYmalGaitController:
             "RH": -0.052,
         }
 
-        # Centros nominales de pie en marco local de pata
+        # Nominal foot centers in the leg's local frame
         self.foot_centers = {
             "LF": np.array([ 0.02, +0.052, -0.52], dtype=float),
             "RF": np.array([ 0.02, -0.052, -0.52], dtype=float),
@@ -318,7 +316,7 @@ class ANYmalGaitController:
         self.detJ_tol = 1e-3
         self.safe_detJ_target = 2.0e-3
 
-        # Control base
+        # Base control
         self.v_base_max = 0.55
         self.omega_base_max = 0.8
         self.k_rho = 0.55
@@ -328,22 +326,22 @@ class ANYmalGaitController:
 
         self.reached_goal = False
 
-        # 2) cruzarlo por en medio
-        # 3) salir
-        # 4) girar y llegar a p_dest_anymal
+        # 2) cross through the middle
+        # 3) exit
+        # 4) turn and reach p_dest_anymal
         cx, cy, cw, ch = self.sim.corridor
         gx, gy = self.sim.anymal_goal
 
         self.path_waypoints = [
-            (cx + 0.15 * cw, cy + 0.50 * ch),   # entrada al corredor
-            (cx + 0.50 * cw, cy + 0.50 * ch),   # centro del corredor
-            (cx + 0.90 * cw, cy + 0.50 * ch),   # salida del corredor
-            (gx, gy),                           # destino final ANYmal
+            (cx + 0.15 * cw, cy + 0.50 * ch),   # corridor entrance
+            (cx + 0.50 * cw, cy + 0.50 * ch),   # corridor center
+            (cx + 0.90 * cw, cy + 0.50 * ch),   # corridor exit
+            (gx, gy),                           # final ANYmal destination
         ]
         self.current_waypoint_idx = 0
         self.waypoint_tol = 0.16
 
-        # Offsets de montaje de los 3 PuzzleBots sobre el lomo del ANYmal
+        # Mounting offsets of the 3 PuzzleBots on the ANYmal's back
         self.pb_mount_offsets = {
             "pb1": (+0.10, +0.08),
             "pb2": (-0.02,  0.00),
@@ -351,12 +349,12 @@ class ANYmalGaitController:
         }
 
     # -------------------------------------------------------------------------
-    # Trayectoria global de la base
+    # Global base trajectory
     # -------------------------------------------------------------------------
 
     def _base_control_to_goal(self, goal_x: float, goal_y: float) -> Tuple[float, float]:
         """
-        Control simple pose->punto para la base del ANYmal.
+        Simple pose->point control for the ANYmal base.
         """
         robot = self.sim.robots["anymal"]
         dx = goal_x - robot.x
@@ -375,15 +373,15 @@ class ANYmalGaitController:
         v_cmd = clamp(v_cmd, 0.0, self.v_base_max)
         omega_cmd = clamp(omega_cmd, -self.omega_base_max, self.omega_base_max)
         return v_cmd, omega_cmd
-    
+
     def _get_current_waypoint(self) -> Tuple[float, float]:
-        """Retorna el waypoint actual."""
+        """Returns the current waypoint."""
         idx = min(self.current_waypoint_idx, len(self.path_waypoints) - 1)
         return self.path_waypoints[idx]
 
 
     def _update_waypoint_progress(self) -> None:
-        """Avanza al siguiente waypoint si ya se alcanzó el actual."""
+        """Advances to the next waypoint if the current one was reached."""
         if self.current_waypoint_idx >= len(self.path_waypoints):
             return
 
@@ -396,7 +394,7 @@ class ANYmalGaitController:
 
     def _integrate_base(self, v_cmd: float, omega_cmd: float) -> None:
         """
-        Integra la base del ANYmal y sincroniza con sim.py.
+        Integrates the ANYmal base and syncs it with sim.py.
         """
         dt = self.sim.dt
         robot = self.sim.robots["anymal"]
@@ -412,22 +410,22 @@ class ANYmalGaitController:
 
     def _sync_puzzlebots_with_anymal(self) -> None:
         """
-        Mantiene a los 3 PuzzleBots montados sobre el ANYmal durante la marcha.
+        Keeps the 3 PuzzleBots mounted on the ANYmal during the gait.
         """
         self.sim.sync_puzzlebots_on_anymal(offsets=self.pb_mount_offsets)
 
     # -------------------------------------------------------------------------
-    # Gait: trayectoria cartesiana del pie
+    # Gait: cartesian foot trajectory
     # -------------------------------------------------------------------------
 
     def _phase_value(self, t: float) -> float:
-        """Fase normalizada en [0,1)."""
+        """Normalized phase in [0,1)."""
         return (t / self.period) % 1.0
 
     def _swing_profile(self, phase: float) -> float:
         """
-        Perfil suave de elevación de swing en [0,1].
-        Solo activa durante la mitad positiva del ciclo.
+        Smooth swing-lift profile in [0,1].
+        Only active during the positive half of the cycle.
         """
         return max(0.0, math.sin(2.0 * math.pi * phase))
 
@@ -439,11 +437,11 @@ class ANYmalGaitController:
         step_height_scale: float = 1.0
     ) -> np.ndarray:
         """
-        Genera posición cartesiana deseada del pie en marco local de la pata.
+        Generates the desired cartesian foot position in the leg's local frame.
 
-        Trote:
-            LF + RH en fase
-            RF + LH en antifase
+        Trot:
+            LF + RH in phase
+            RF + LH in antiphase
         """
         phase = self._phase_value(t)
 
@@ -454,18 +452,18 @@ class ANYmalGaitController:
 
         center = self.foot_centers[leg_name].copy()
 
-        # Avance/retroceso local del pie
+        # Local forward/backward foot motion
         x = center[0] + step_length_scale * self.step_length * (lift - 0.5 * max(0.0, 1.0 - lift))
-        # Altura en swing
+        # Height during swing
         z = center[2] + step_height_scale * self.step_height * lift
 
-        # Mantener y nominal
+        # Keep nominal y
         y = center[1]
 
         return np.array([x, y, z], dtype=float)
 
     # -------------------------------------------------------------------------
-    # Singularidades
+    # Singularities
     # -------------------------------------------------------------------------
 
     def _compute_q12_from_cartesian_targets(
@@ -473,8 +471,8 @@ class ANYmalGaitController:
         foot_targets: Dict[str, np.ndarray]
     ) -> Tuple[np.ndarray, Dict[str, float], Dict[str, np.ndarray]]:
         """
-        Resuelve IK por pata y retorna:
-            q12, detJ por pata, posiciones FK verificadas
+        Solves IK per leg and returns:
+            q12, detJ per leg, verified FK positions
         """
         q12 = np.zeros(12, dtype=float)
         detJ = {}
@@ -497,7 +495,7 @@ class ANYmalGaitController:
         max_iter: int = 5
     ) -> Tuple[np.ndarray, Dict[str, float], Dict[str, np.ndarray], bool]:
         """
-        Genera targets cartesianos y reduce amplitudes si encuentra singularidades.
+        Generates cartesian targets and reduces amplitudes if singularities are found.
         """
         step_length_scale = 1
         step_height_scale = 1
@@ -520,7 +518,7 @@ class ANYmalGaitController:
             if min_det > self.detJ_tol:
                 return q12, detJ, feet_fk, violated
 
-            # Ajustar amplitud para alejarse de singularidad
+            # Adjust amplitude to move away from the singularity
             step_length_scale *= 0.70
             step_height_scale *= 0.80
             violated = True
@@ -542,7 +540,7 @@ class ANYmalGaitController:
         singularity_violation: bool,
         phase_name: str = "anymal_trot"
     ) -> None:
-        """Guarda una muestra del ANYmal."""
+        """Saves an ANYmal sample."""
         self.log.append(
             t=t,
             base_pose=self.anymal.get_base_pose(),
@@ -556,48 +554,48 @@ class ANYmalGaitController:
         )
 
     # -------------------------------------------------------------------------
-    # Ejecución principal
+    # Main execution
     # -------------------------------------------------------------------------
 
     def run(self, verbose: bool = True) -> ANYmalLog:
         """
-        Corre la Fase 2 completa:
-        - trote
-        - avance a p_destino
-        - monitoreo de singularidades
+        Runs the full Phase 2:
+        - trot
+        - advance to p_destino
+        - singularity monitoring
         """
         self.reached_goal = False
         gx, gy = self.sim.anymal_goal
 
-        # Al inicio los PuzzleBots van montados sobre el ANYmal
+        # At the start the PuzzleBots are mounted on the ANYmal
         self._sync_puzzlebots_with_anymal()
         self.sim.record_state(
             phase="anymal_init",
-            note="Inicio fase ANYmal con 3 PuzzleBots montados"
+            note="Start of ANYmal phase with 3 PuzzleBots mounted"
         )
 
         for k in range(self.max_steps):
             t = self.sim.time
 
-            # 1) waypoint actual
+            # 1) current waypoint
             wp_x, wp_y = self._get_current_waypoint()
 
-            # 2) control de base hacia waypoint
+            # 2) base control toward waypoint
             v_base_cmd, omega_base_cmd = self._base_control_to_goal(wp_x, wp_y)
 
-            # 3) gait cartesiano + IK + monitoreo de singularidades
+            # 3) cartesian gait + IK + singularity monitoring
             q12, detJ, feet_fk, singularity_violation = self._avoid_singularities(t)
 
-            # 4) aplicar articulaciones
+            # 4) apply joints
             self.anymal.set_all_joint_angles(q12)
 
-            # 5) integrar base
+            # 5) integrate base
             self._integrate_base(v_base_cmd, omega_base_cmd)
 
-            # 6) avanzar waypoint si ya llegó
+            # 6) advance waypoint if reached
             self._update_waypoint_progress()
 
-            # 7) logging local
+            # 7) local logging
             self._log_step(
                 t=t,
                 v_base_cmd=v_base_cmd,
@@ -609,7 +607,7 @@ class ANYmalGaitController:
                 phase_name=f"anymal_trot_wp{self.current_waypoint_idx}"
             )
 
-            # 8) logging global
+            # 8) global logging
             min_det = min(abs(detJ[name]) for name in ANYmal.LEG_NAMES)
             self.sim.step(
                 phase="anymal",
@@ -631,35 +629,35 @@ class ANYmalGaitController:
                     f"min|detJ|={min_det:.4e}"
                 )
 
-            # éxito final
+            # final success
             if err < 0.15 and self.current_waypoint_idx >= len(self.path_waypoints) - 1:
                 self.reached_goal = True
                 break
 
-        # Al terminar la marcha, solo desplegar si realmente llegó al destino
+        # When the gait finishes, only deploy if the destination was actually reached
         if self.reached_goal:
             self.sim.activate_puzzlebots_at_work_zone()
             self.sim.record_state(
                 phase="anymal_done",
-                note="ANYmal llegó a p_dest y desplegó los 3 PuzzleBots"
+                note="ANYmal reached p_dest and deployed the 3 PuzzleBots"
             )
         else:
             self.sim.record_state(
                 phase="anymal_failed",
-                note="ANYmal no llegó a p_dest; no se despliegan PuzzleBots"
+                note="ANYmal did not reach p_dest; PuzzleBots not deployed"
             )
 
         return self.log
 
 
 # =============================================================================
-# Gráficas de la fase ANYmal
+# ANYmal phase plots
 # =============================================================================
 
-def plot_anymal_phase_results(log, title="ANYmal - Actuadores y Trayectoria de Pies",
+def plot_anymal_phase_results(log, title="ANYmal - Actuators and Foot Trajectory",
                               save_path=None):
     """
-    Gráfica estilo demo/base del curso.
+    Plot in the style of the course demo/base.
     """
     fig = plt.figure(figsize=(14, 10))
     fig.suptitle(title, fontsize=14, fontweight='bold')
@@ -672,31 +670,31 @@ def plot_anymal_phase_results(log, title="ANYmal - Actuadores y Trayectoria de P
     q_arr = np.array(log.q)
     t_arr = np.array(log.t)
 
-    # --- Subplots 1-4: ángulos articulares de cada pata ---
+    # --- Subplots 1-4: joint angles of each leg ---
     for i, name in enumerate(['LF', 'RF', 'LH', 'RH']):
         ax = fig.add_subplot(gs[0, i])
         q_leg = q_arr[:, 3*i:3*(i+1)]
         for j in range(3):
             ax.plot(t_arr, np.degrees(q_leg[:, j]),
                     linewidth=1.8, label=joint_labels[j])
-        ax.set_title(f'Pata {name}', color=leg_colors[name], fontweight='bold')
+        ax.set_title(f'Leg {name}', color=leg_colors[name], fontweight='bold')
         ax.set_xlabel('t [s]')
-        ax.set_ylabel('angulo [deg]')
+        ax.set_ylabel('angle [deg]')
         ax.legend(fontsize=8, loc='best')
         ax.grid(True, alpha=0.3)
 
-    # --- Subplot 5: altura z de todos los pies ---
+    # --- Subplot 5: z height of all feet ---
     ax = fig.add_subplot(gs[1, :2])
     for name in ['LF', 'RF', 'LH', 'RH']:
         ax.plot(t_arr, np.array(log.foot_z[name]),
-                color=leg_colors[name], linewidth=2, label=f'Pie {name}')
-    ax.set_xlabel('Tiempo [s]')
-    ax.set_ylabel('z del pie [m]')
-    ax.set_title('Altura de los pies (stance vs swing)')
+                color=leg_colors[name], linewidth=2, label=f'Foot {name}')
+    ax.set_xlabel('Time [s]')
+    ax.set_ylabel('foot z [m]')
+    ax.set_title('Foot height (stance vs swing)')
     ax.legend(loc='best', fontsize=9)
     ax.grid(True, alpha=0.3)
 
-    # --- Subplot 6: trayectoria XZ de los pies ---
+    # --- Subplot 6: XZ trajectory of the feet ---
     ax = fig.add_subplot(gs[1, 2:])
     for name in ['LF', 'RF', 'LH', 'RH']:
         fx = np.array(log.foot_x[name])
@@ -704,14 +702,14 @@ def plot_anymal_phase_results(log, title="ANYmal - Actuadores y Trayectoria de P
         ax.plot(fx, fz,
                 color=leg_colors[name], linewidth=2, label=f'{name}', alpha=0.7)
         ax.plot(fx[0], fz[0], 'o', color=leg_colors[name], markersize=8)
-    ax.set_xlabel('x del pie [m]')
-    ax.set_ylabel('z del pie [m]')
-    ax.set_title('Trayectoria lateral (XZ) de los pies')
+    ax.set_xlabel('foot x [m]')
+    ax.set_ylabel('foot z [m]')
+    ax.set_title('Lateral (XZ) foot trajectory')
     ax.legend(loc='best', fontsize=9)
     ax.grid(True, alpha=0.3)
     ax.set_aspect('equal', adjustable='datalim')
 
-    # --- Subplots 7-10: velocidades articulares ---
+    # --- Subplots 7-10: joint velocities ---
     dt = t_arr[1] - t_arr[0] if len(t_arr) > 1 else 0.04
     dq = np.gradient(q_arr, dt, axis=0)
 
@@ -721,7 +719,7 @@ def plot_anymal_phase_results(log, title="ANYmal - Actuadores y Trayectoria de P
         for j in range(3):
             ax.plot(t_arr, dq_leg[:, j],
                     linewidth=1.5, label=joint_labels[j])
-        ax.set_title(f'Velocidades {name}', fontsize=10)
+        ax.set_title(f'Velocities {name}', fontsize=10)
         ax.set_xlabel('t [s]')
         ax.set_ylabel('dq/dt [rad/s]')
         ax.legend(fontsize=7, loc='best')
@@ -729,17 +727,17 @@ def plot_anymal_phase_results(log, title="ANYmal - Actuadores y Trayectoria de P
 
     if save_path:
         plt.savefig(save_path, dpi=150, bbox_inches='tight')
-        print(f"  -> Figura guardada en {save_path}")
+        print(f"  -> Figure saved at {save_path}")
     return fig
 
 
 # =============================================================================
-# Demo local
+# Local demo
 # =============================================================================
 
 def demo_anymal_gait():
     """
-    Demo de la Fase 2 del reto.
+    Demo of Phase 2 of the challenge.
     """
     sim = WarehouseSim(dt=0.04)
 
@@ -747,21 +745,21 @@ def demo_anymal_gait():
     log = controller.run(verbose=True)
 
     err = sim.anymal_goal_error()
-    print("\nResumen fase ANYmal:")
-    print(f"  Error final a p_destino: {err:.3f} m")
-    print(f"  Cumple error < 0.15 m: {err < 0.15}")
-    print(f"  Eventos de ajuste por singularidad: {len(log.singularity_events)}")
-    print(f"  Tiempo total: {sim.time:.2f} s")
+    print("\nANYmal phase summary:")
+    print(f"  Final error to p_destino: {err:.3f} m")
+    print(f"  Meets error < 0.15 m: {err < 0.15}")
+    print(f"  Singularity adjustment events: {len(log.singularity_events)}")
+    print(f"  Total time: {sim.time:.2f} s")
 
     plot_anymal_phase_results(
         log=log,
-        title="ANYmal Fase 2: Marcha Trote",
-        save_path="anymal_phase2_gait.png"
+        title="ANYmal Phase 2: Trot Gait",
+        save_path=str(PLOTS_DIR / "anymal_phase2_gait.png")
     )
 
     sim.draw_world(
         phase="anymal_done",
-        note=f"ANYmal llegó. error={err:.3f} m",
+        note=f"ANYmal arrived. error={err:.3f} m",
         show_lidar=False
     )
     plt.tight_layout()

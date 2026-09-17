@@ -1,84 +1,82 @@
 """
 puzzlebot_arm.py
 ----------------
-Mini brazo 3 DoF montado sobre un PuzzleBot.
+Mini 3-DoF arm mounted on a PuzzleBot.
 
-Configuración cinemática adoptada:
-    - q1: rotación de base (yaw) alrededor de z
-    - q2: articulación del hombro en un plano vertical
-    - q3: articulación del codo en el mismo plano vertical
+Kinematic configuration adopted:
+    - q1: base rotation (yaw) around z
+    - q2: shoulder joint in a vertical plane
+    - q3: elbow joint in the same vertical plane
 
-Geometría:
-    - l1: altura fija del soporte/base respecto al origen del brazo
-    - l2: longitud del primer eslabón
-    - l3: longitud del segundo eslabón
+Geometry:
+    - l1: fixed height of the support/base relative to the arm origin
+    - l2: length of the first link
+    - l3: length of the second link
 
-Marco base del brazo:
-    - origen en la base del brazo sobre el PuzzleBot
-    - eje z hacia arriba
-    - x,y en el plano horizontal
+Arm base frame:
+    - origin at the arm base on the PuzzleBot
+    - z axis pointing up
+    - x, y in the horizontal plane
 
-Este módulo incluye:
+This module includes:
     - FK
-    - IK geométrica cerrada
-    - Jacobiano analítico 3x3
-    - mapeo fuerza->torques: tau = J^T f
-    - trayectoria cartesiana simple para grasp_box
-    - utilidades de demo y plots
+    - closed-form geometric IK
+    - analytic 3x3 Jacobian
+    - force->torque mapping: tau = J^T f
+    - simple Cartesian trajectory for grasp_box
+    - demo and plotting utilities
 
-Autores: 
-Josue Ureña Valencia				IRS | A01738940
-César Arellano Arellano			    IRS | A00839373
-Jose Eduardo Sanchez Martinez		IRS | A01738476
-Rafael André Gamiz Salazar			IRS | A00838280
-Curso: TE3002B - Robots Móviles Terrestres
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 import math
 import numpy as np
 import matplotlib.pyplot as plt
 
+PLOTS_DIR = Path(__file__).resolve().parent.parent / "plots"
+PLOTS_DIR.mkdir(parents=True, exist_ok=True)
+
 
 # =============================================================================
-# Utilidades
+# Utilities
 # =============================================================================
 
 def clamp(value: float, low: float, high: float) -> float:
-    """Satura un valor al intervalo [low, high]."""
+    """Saturates a value to the interval [low, high]."""
     return max(low, min(high, value))
 
 
 def wrap_angle(theta: float) -> float:
-    """Normaliza un ángulo a [-pi, pi]."""
+    """Normalizes an angle to [-pi, pi]."""
     return math.atan2(math.sin(theta), math.cos(theta))
 
 
 def linspace_points(p0: np.ndarray, p1: np.ndarray, n: int) -> np.ndarray:
-    """Interpola linealmente n puntos entre p0 y p1."""
+    """Linearly interpolates n points between p0 and p1."""
     p0 = np.asarray(p0, dtype=float)
     p1 = np.asarray(p1, dtype=float)
     return np.linspace(p0, p1, n)
 
 
 # =============================================================================
-# Resultado de un grasp
+# Result of a grasp
 # =============================================================================
 
 @dataclass
 class GraspResult:
     """
-    Resultado de la maniobra de agarre.
+    Result of the grasp maneuver.
 
-    Campos:
-        cartesian_path: trayectoria del efector final en espacio cartesiano
-        joint_path: trayectoria articular correspondiente
-        torques: torques articulares estimados por tau = J^T f
-        final_q: configuración articular final
-        reached: si se alcanzó la caja sin error de IK significativo
+    Fields:
+        cartesian_path: end-effector trajectory in Cartesian space
+        joint_path: corresponding joint trajectory
+        torques: joint torques estimated by tau = J^T f
+        final_q: final joint configuration
+        reached: whether the box was reached without significant IK error
     """
     cartesian_path: np.ndarray
     joint_path: np.ndarray
@@ -88,19 +86,19 @@ class GraspResult:
 
 
 # =============================================================================
-# Mini brazo del PuzzleBot
+# PuzzleBot mini arm
 # =============================================================================
 
 class PuzzleBotArm:
     """
-    Mini brazo planar de 3 DoF montado sobre un PuzzleBot.
+    Mini planar 3-DoF arm mounted on a PuzzleBot.
 
-    Interpretación usada:
-        q1 = yaw de base
-        q2 = pitch del hombro
-        q3 = pitch del codo
+    Interpretation used:
+        q1 = base yaw
+        q2 = shoulder pitch
+        q3 = elbow pitch
 
-    Con l1 como altura fija de la base:
+    With l1 as the fixed base height:
         rho = l2*cos(q2) + l3*cos(q2+q3)
         x   = rho*cos(q1)
         y   = rho*sin(q1)
@@ -114,19 +112,19 @@ class PuzzleBotArm:
 
         self.q = np.zeros(3, dtype=float)
 
-        # Límites razonables de seguridad
+        # Reasonable safety limits
         self.q_min = np.array([-math.pi, -1.4, -2.5], dtype=float)
         self.q_max = np.array([+math.pi, +1.4, +2.5], dtype=float)
 
     # -------------------------------------------------------------------------
-    # Cinemática directa
+    # Forward kinematics
     # -------------------------------------------------------------------------
 
     def forward_kinematics(self, q: Optional[np.ndarray] = None) -> np.ndarray:
         """
-        Calcula la posición (x, y, z) del efector final.
+        Computes the (x, y, z) position of the end effector.
 
-        Si q es None, usa self.q.
+        If q is None, uses self.q.
         """
         if q is not None:
             self.q = np.asarray(q, dtype=float)
@@ -142,36 +140,36 @@ class PuzzleBotArm:
         return np.array([x, y, z], dtype=float)
 
     # -------------------------------------------------------------------------
-    # Cinemática inversa
+    # Inverse kinematics
     # -------------------------------------------------------------------------
 
     def inverse_kinematics(self, p_des: np.ndarray) -> np.ndarray:
         """
-        IK geométrica cerrada -> (q1, q2, q3).
+        Closed-form geometric IK -> (q1, q2, q3).
 
-        Estrategia:
-            1) q1 se obtiene del plano XY
-            2) se resuelve un manipulador 2R en el plano (rho, z-l1)
+        Strategy:
+            1) q1 is obtained from the XY plane
+            2) a 2R manipulator is solved in the (rho, z-l1) plane
 
-        Convención:
-            se elige la rama "codo abajo" por defecto (q3 negativo)
-            si no es alcanzable exactamente, se proyecta al workspace.
+        Convention:
+            the "elbow down" branch is chosen by default (negative q3)
+            if it is not exactly reachable, it is projected onto the workspace.
         """
         x, y, z = map(float, p_des)
 
-        # q1 por proyección horizontal
+        # q1 from horizontal projection
         q1 = math.atan2(y, x)
 
-        # problema 2R en (rho, z_hat)
+        # 2R problem in (rho, z_hat)
         rho = math.hypot(x, y)
         z_hat = z - self.l1
 
-        # Alcance máximo y mínimo
+        # Maximum and minimum reach
         r2 = rho**2 + z_hat**2
         cos_q3 = (r2 - self.l2**2 - self.l3**2) / (2.0 * self.l2 * self.l3)
         cos_q3 = clamp(cos_q3, -1.0, 1.0)
 
-        # Rama preferida: codo abajo
+        # Preferred branch: elbow down
         sin_q3 = -math.sqrt(max(0.0, 1.0 - cos_q3**2))
         q3 = math.atan2(sin_q3, cos_q3)
 
@@ -184,12 +182,12 @@ class PuzzleBotArm:
         return q
 
     # -------------------------------------------------------------------------
-    # Jacobiano
+    # Jacobian
     # -------------------------------------------------------------------------
 
     def jacobian(self, q: Optional[np.ndarray] = None) -> np.ndarray:
         """
-        Jacobiano analítico 3x3 del efector final.
+        Analytic 3x3 Jacobian of the end effector.
 
         p = [x, y, z]
         q = [q1, q2, q3]
@@ -225,20 +223,20 @@ class PuzzleBotArm:
         return J
 
     def det_jacobian(self, q: Optional[np.ndarray] = None) -> float:
-        """Determinante del Jacobiano."""
+        """Determinant of the Jacobian."""
         return float(np.linalg.det(self.jacobian(q)))
 
     def is_singular(self, q: Optional[np.ndarray] = None, tol: float = 1e-5) -> bool:
-        """Indica si la configuración está cerca de singularidad."""
+        """Indicates whether the configuration is close to a singularity."""
         return abs(self.det_jacobian(q)) < tol
 
     # -------------------------------------------------------------------------
-    # Fuerza a torque
+    # Force to torque
     # -------------------------------------------------------------------------
 
     def force_to_torque(self, f_tip: np.ndarray, q: Optional[np.ndarray] = None) -> np.ndarray:
         """
-        Mapea una fuerza en el efector a torques articulares:
+        Maps a force at the end effector to joint torques:
             tau = J^T * f
         """
         f_tip = np.asarray(f_tip, dtype=float).reshape(3)
@@ -246,16 +244,16 @@ class PuzzleBotArm:
         return J.T @ f_tip
 
     # -------------------------------------------------------------------------
-    # Trayectorias
+    # Trajectories
     # -------------------------------------------------------------------------
 
     def current_pose(self) -> np.ndarray:
-        """Retorna la pose cartesiana actual del efector final."""
+        """Returns the current Cartesian pose of the end effector."""
         return self.forward_kinematics(self.q)
 
     def cartesian_trajectory(self, p_start: np.ndarray, p_goal: np.ndarray, n_points: int = 30) -> np.ndarray:
         """
-        Genera una trayectoria cartesiana lineal desde p_start hasta p_goal.
+        Generates a linear Cartesian trajectory from p_start to p_goal.
         """
         return linspace_points(p_start, p_goal, n_points)
 
@@ -270,18 +268,18 @@ class PuzzleBotArm:
         n_points: int = 30
     ) -> GraspResult:
         """
-        Mueve el efector a box_pos y aplica una fuerza vertical de agarre.
+        Moves the end effector to box_pos and applies a vertical grasping force.
 
-        Pasos:
-            1) Generar trayectoria cartesiana desde pose actual a box_pos.
-            2) Para cada punto, resolver IK.
-            3) En el punto final, aplicar una fuerza vertical hacia abajo:
+        Steps:
+            1) Generate a Cartesian trajectory from the current pose to box_pos.
+            2) For each point, solve IK.
+            3) At the final point, apply a vertical downward force:
                    f = [0, 0, -grip_force]
-               y convertirla a torques con tau = J^T f.
+               and convert it to torques with tau = J^T f.
 
-        Nota:
-            Aquí el 'grip' es una abstracción cinemática/estática para cumplir
-            con el criterio del reto y poder loguear torques.
+        Note:
+            Here 'grip' is a kinematic/static abstraction to satisfy
+            the challenge criteria and be able to log torques.
         """
         box_pos = np.asarray(box_pos, dtype=float).reshape(3)
 
@@ -298,14 +296,14 @@ class PuzzleBotArm:
             self.q = q_i.copy()
             joint_path[i, :] = q_i
 
-            # Sin contacto en el trayecto; torque de fuerza solo al final
+            # No contact along the path; force torque only at the end
             if i < n_points - 1:
                 torques[i, :] = np.zeros(3)
             else:
                 f_contact = np.array([0.0, 0.0, -abs(grip_force)], dtype=float)
                 torques[i, :] = self.force_to_torque(f_contact, q=q_i)
 
-            # Verificación de error FK
+            # FK error check
             p_check = self.forward_kinematics(q_i)
             if np.linalg.norm(p_check - p) > 3e-2:
                 reached = False
@@ -322,15 +320,15 @@ class PuzzleBotArm:
 
 
 # =============================================================================
-# Tests y demos
+# Tests and demos
 # =============================================================================
 
 def unit_test_fk_ik(arm: PuzzleBotArm, test_points: List[np.ndarray]) -> None:
     """
-    Test simple de consistencia FK/IK.
+    Simple FK/IK consistency test.
     """
     print("=" * 70)
-    print("TEST FK / IK - PuzzleBotArm")
+    print("FK / IK TEST - PuzzleBotArm")
     print("=" * 70)
 
     for i, p in enumerate(test_points, start=1):
@@ -348,43 +346,43 @@ def unit_test_fk_ik(arm: PuzzleBotArm, test_points: List[np.ndarray]) -> None:
 
 def plot_grasp_result(result: GraspResult, title: str = "PuzzleBotArm - grasp_box", save_path: Optional[str] = None):
     """
-    Grafica la trayectoria cartesiana, ángulos articulares y torques.
+    Plots the Cartesian trajectory, joint angles, and torques.
     """
     t = np.arange(len(result.cartesian_path))
 
     fig, axes = plt.subplots(2, 2, figsize=(12, 8))
     fig.suptitle(title, fontsize=14, fontweight="bold")
 
-    # Trayectoria 3D proyectada en XZ
+    # 3D trajectory projected onto XZ
     ax = axes[0, 0]
     ax.plot(result.cartesian_path[:, 0], result.cartesian_path[:, 2], "b-", linewidth=2)
-    ax.plot(result.cartesian_path[0, 0], result.cartesian_path[0, 2], "go", markersize=8, label="Inicio")
-    ax.plot(result.cartesian_path[-1, 0], result.cartesian_path[-1, 2], "rs", markersize=8, label="Fin")
-    ax.set_title("Trayectoria cartesiana (plano XZ)")
+    ax.plot(result.cartesian_path[0, 0], result.cartesian_path[0, 2], "go", markersize=8, label="Start")
+    ax.plot(result.cartesian_path[-1, 0], result.cartesian_path[-1, 2], "rs", markersize=8, label="End")
+    ax.set_title("Cartesian trajectory (XZ plane)")
     ax.set_xlabel("x [m]")
     ax.set_ylabel("z [m]")
     ax.grid(True, alpha=0.3)
     ax.legend()
 
-    # Trayectoria XY
+    # XY trajectory
     ax = axes[0, 1]
     ax.plot(result.cartesian_path[:, 0], result.cartesian_path[:, 1], "m-", linewidth=2)
     ax.plot(result.cartesian_path[0, 0], result.cartesian_path[0, 1], "go", markersize=8)
     ax.plot(result.cartesian_path[-1, 0], result.cartesian_path[-1, 1], "rs", markersize=8)
-    ax.set_title("Trayectoria cartesiana (plano XY)")
+    ax.set_title("Cartesian trajectory (XY plane)")
     ax.set_xlabel("x [m]")
     ax.set_ylabel("y [m]")
     ax.grid(True, alpha=0.3)
     ax.set_aspect("equal", adjustable="datalim")
 
-    # Ángulos articulares
+    # Joint angles
     ax = axes[1, 0]
     ax.plot(t, result.joint_path[:, 0], label="q1")
     ax.plot(t, result.joint_path[:, 1], label="q2")
     ax.plot(t, result.joint_path[:, 2], label="q3")
-    ax.set_title("Trayectoria articular")
-    ax.set_xlabel("Muestra")
-    ax.set_ylabel("Ángulo [rad]")
+    ax.set_title("Joint trajectory")
+    ax.set_xlabel("Sample")
+    ax.set_ylabel("Angle [rad]")
     ax.grid(True, alpha=0.3)
     ax.legend()
 
@@ -393,8 +391,8 @@ def plot_grasp_result(result: GraspResult, title: str = "PuzzleBotArm - grasp_bo
     ax.plot(t, result.torques[:, 0], label=r"$\tau_1$")
     ax.plot(t, result.torques[:, 1], label=r"$\tau_2$")
     ax.plot(t, result.torques[:, 2], label=r"$\tau_3$")
-    ax.set_title(r"Torques por $\tau = J^T f$")
-    ax.set_xlabel("Muestra")
+    ax.set_title(r"Torques from $\tau = J^T f$")
+    ax.set_xlabel("Sample")
     ax.set_ylabel("Torque [N·m]")
     ax.grid(True, alpha=0.3)
     ax.legend()
@@ -402,21 +400,21 @@ def plot_grasp_result(result: GraspResult, title: str = "PuzzleBotArm - grasp_bo
     plt.tight_layout()
     if save_path:
         plt.savefig(save_path, dpi=150, bbox_inches="tight")
-        print(f"  -> Figura guardada en {save_path}")
+        print(f"  -> Figure saved to {save_path}")
 
     return fig
 
 
 def demo_puzzlebot_arm():
     """
-    Demo principal del mini brazo.
+    Main demo of the mini arm.
     """
     arm = PuzzleBotArm(l1=0.10, l2=0.08, l3=0.06)
 
-    # Configuración inicial cómoda
+    # Comfortable initial configuration
     arm.q = np.array([0.0, 0.15, -0.60], dtype=float)
 
-    # Algunos puntos de prueba alcanzables
+    # A few reachable test points
     test_points = [
         np.array([0.10, 0.00, 0.14]),
         np.array([0.08, 0.04, 0.13]),
@@ -425,19 +423,19 @@ def demo_puzzlebot_arm():
 
     unit_test_fk_ik(arm, test_points)
 
-    # Simulación de agarre de caja
+    # Box grasp simulation
     box_pos = np.array([0.09, 0.03, 0.135], dtype=float)
     result = arm.grasp_box(box_pos=box_pos, grip_force=5.0, n_points=35)
 
-    print("\nResumen grasp_box:")
+    print("\ngrasp_box summary:")
     print(f"  reached = {result.reached}")
     print(f"  final_q = {np.round(result.final_q, 4)}")
-    print(f"  torque final = {np.round(result.torques[-1], 4)}")
+    print(f"  final torque = {np.round(result.torques[-1], 4)}")
 
     plot_grasp_result(
         result,
-        title="PuzzleBotArm - Trayectoria y Torques",
-        save_path="puzzlebot_arm_grasp.png"
+        title="PuzzleBotArm - Trajectory and Torques",
+        save_path=str(PLOTS_DIR / "puzzlebot_arm_grasp.png")
     )
 
     plt.show()

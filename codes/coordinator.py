@@ -1,42 +1,37 @@
 """
 coordinator.py
 --------------
-Máquina de estados del mini reto completo:
+State machine for the complete mini challenge:
 
-Fase 1:
-    Husky despeja el corredor empujando 3 cajas grandes
+Phase 1:
+    Husky clears the corridor by pushing 3 large boxes
 
-Fase 2:
-    ANYmal cruza el corredor y llega a la zona de trabajo
+Phase 2:
+    ANYmal crosses the corridor and reaches the work zone
 
-Fase 3:
-    3 PuzzleBots se coordinan para apilar cajas pequeñas
-    en orden obligatorio: C abajo, B en medio, A arriba
+Phase 3:
+    3 PuzzleBots coordinate to stack small boxes
+    in mandatory order: C at the bottom, B in the middle, A on top
 
-Archivos requeridos esperados:
+Expected required files:
     - sim.py
     - husky_pusher.py
     - anymal_gait.py
     - puzzlebot_arm.py
 
-Este coordinador:
-    - reutiliza el mismo escenario global (WarehouseSim)
-    - ejecuta las fases en secuencia real
-    - usa time-slotting para evitar colisiones entre PuzzleBots
-    - registra métricas pedidas en el reto
-    - puede generar animación final del escenario
+This coordinator:
+    - reuses the same global scenario (WarehouseSim)
+    - runs the phases in real sequence
+    - uses time-slotting to avoid collisions between PuzzleBots
+    - records the metrics requested for the challenge
+    - can generate a final animation of the scenario
 
-Autores: 
-Josue Ureña Valencia				IRS | A01738940
-César Arellano Arellano			    IRS | A00839373
-Jose Eduardo Sanchez Martinez		IRS | A01738476
-Rafael André Gamiz Salazar			IRS | A00838280
-Curso: TE3002B - Robots Móviles Terrestres
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 import math
 import numpy as np
@@ -48,14 +43,15 @@ from husky_pusher import HuskyPusher, plot_husky_phase_results, plot_husky_demo_
 from anymal_gait import ANYmalGaitController, plot_anymal_phase_results
 from puzzlebot_arm import PuzzleBotArm, GraspResult
 
+PLOTS_DIR = Path(__file__).resolve().parent.parent / "plots"
+PLOTS_DIR.mkdir(parents=True, exist_ok=True)
 
-# =============================================================================
-# Logging global del coordinador
-# =============================================================================
+
+# Global coordinator logging
 
 @dataclass
 class CoordinatorMetrics:
-    """Métricas globales del reto."""
+    """Global metrics for the challenge."""
     husky_time: float = 0.0
     anymal_time: float = 0.0
     puzzlebot_time: float = 0.0
@@ -72,7 +68,7 @@ class CoordinatorMetrics:
 
 @dataclass
 class CoordinatorLog:
-    """Bitácora resumida de estados del coordinador."""
+    """Summary log of coordinator states."""
     t: List[float] = field(default_factory=list)
     state: List[str] = field(default_factory=list)
     note: List[str] = field(default_factory=list)
@@ -83,15 +79,11 @@ class CoordinatorLog:
         self.note.append(note)
 
 
-# =============================================================================
-# Control simple de PuzzleBot base móvil
-# =============================================================================
-
 class PuzzleBotMobile:
     """
-    Modelo muy simple de navegación 2D del PuzzleBot dentro del coordinador.
-    No reemplaza el archivo de PuzzleBot del curso; solo sirve para orquestar
-    la fase 3 sobre el escenario global.
+    Very simple 2D navigation model for the PuzzleBot within the coordinator.
+    It does not replace the course's PuzzleBot file; it only serves to
+    orchestrate phase 3 on the global scenario.
     """
 
     def __init__(self, sim: WarehouseSim, robot_name: str):
@@ -106,11 +98,11 @@ class PuzzleBotMobile:
         self.pos_tol = 0.08
         self.ang_tol = math.radians(8.0)
 
-        # Parámetros tipo demo/base del PuzzleBot
+        # Demo/base-style PuzzleBot parameters
         self.r = 0.05
         self.L = 0.19
 
-        # Log estilo demo
+        # Demo-style log
         self.motion_log = {
             't': [],
             'x': [],
@@ -131,9 +123,9 @@ class PuzzleBotMobile:
 
     def step_to_pose(self, gx: float, gy: float, gtheta: Optional[float] = None) -> bool:
         """
-        Da un paso de navegación hacia una pose objetivo.
-        Retorna True si la pose ya fue alcanzada.
-        Además guarda un log estilo PuzzleBot demo.
+        Takes a navigation step toward a target pose.
+        Returns True if the pose has already been reached.
+        Also stores a PuzzleBot demo-style log.
         """
         dt = self.sim.dt
         x, y, theta = self.get_pose()
@@ -176,7 +168,7 @@ class PuzzleBotMobile:
 
         self.set_pose(x_new, y_new, theta_new)
 
-        # Cinemática inversa estilo PuzzleBot base
+        # Inverse kinematics, base PuzzleBot style
         wR = (2.0 * v + omega * self.L) / (2.0 * self.r)
         wL = (2.0 * v - omega * self.L) / (2.0 * self.r)
 
@@ -191,15 +183,10 @@ class PuzzleBotMobile:
 
         return done
 
-
-# =============================================================================
-# Coordinador principal
-# =============================================================================
-
-def plot_puzzlebot_demo_style(log, title="PuzzleBot - Trayectoria y Actuadores",
+def plot_puzzlebot_demo_style(log, title="PuzzleBot - Trajectory and Actuators",
                               save_path=None):
     """
-    Gráfica estilo demo/base del PuzzleBot.
+    Demo/base-style plot for the PuzzleBot.
     """
     t = np.array(log['t'])
     x = np.array(log['x'])
@@ -213,12 +200,12 @@ def plot_puzzlebot_demo_style(log, title="PuzzleBot - Trayectoria y Actuadores",
     fig, axes = plt.subplots(2, 2, figsize=(12, 9))
     fig.suptitle(title, fontsize=14, fontweight='bold')
 
-    # --- Trayectoria XY ---
+    # --- XY trajectory ---
     ax = axes[0, 0]
-    ax.plot(x, y, 'b-', linewidth=2, label='Trayectoria')
+    ax.plot(x, y, 'b-', linewidth=2, label='Trajectory')
     if len(x) > 0:
-        ax.plot(x[0], y[0], 'go', markersize=10, label='Inicio')
-        ax.plot(x[-1], y[-1], 'rs', markersize=10, label='Fin')
+        ax.plot(x[0], y[0], 'go', markersize=10, label='Start')
+        ax.plot(x[-1], y[-1], 'rs', markersize=10, label='End')
         step = max(1, len(t) // 20)
         for i in range(0, len(t), step):
             dx = 0.05 * np.cos(theta[i])
@@ -228,56 +215,56 @@ def plot_puzzlebot_demo_style(log, title="PuzzleBot - Trayectoria y Actuadores",
                      fc='orange', ec='orange')
     ax.set_xlabel('x [m]')
     ax.set_ylabel('y [m]')
-    ax.set_title('Trayectoria en el plano XY')
+    ax.set_title('Trajectory in the XY plane')
     ax.legend()
     ax.grid(True, alpha=0.3)
     ax.set_aspect('equal', adjustable='datalim')
 
-    # --- Actuadores ---
+    # --- Actuators ---
     ax = axes[0, 1]
-    ax.plot(t, wR, 'b-', linewidth=2, label=r'$\omega_R$ (rueda der.)')
-    ax.plot(t, wL, 'r-', linewidth=2, label=r'$\omega_L$ (rueda izq.)')
-    ax.set_xlabel('Tiempo [s]')
-    ax.set_ylabel('Velocidad angular [rad/s]')
-    ax.set_title('Actuadores: velocidades de ruedas')
+    ax.plot(t, wR, 'b-', linewidth=2, label=r'$\omega_R$ (right wheel)')
+    ax.plot(t, wL, 'r-', linewidth=2, label=r'$\omega_L$ (left wheel)')
+    ax.set_xlabel('Time [s]')
+    ax.set_ylabel('Angular velocity [rad/s]')
+    ax.set_title('Actuators: wheel velocities')
     ax.legend()
     ax.grid(True, alpha=0.3)
 
-    # --- Velocidades del cuerpo ---
+    # --- Body velocities ---
     ax = axes[1, 0]
     ax2 = ax.twinx()
     l1 = ax.plot(t, v, 'g-', linewidth=2, label='v [m/s]')
     l2 = ax2.plot(t, omega, 'm-', linewidth=2, label=r'$\omega$ [rad/s]')
-    ax.set_xlabel('Tiempo [s]')
-    ax.set_ylabel('Velocidad lineal v [m/s]', color='g')
-    ax2.set_ylabel(r'Velocidad angular $\omega$ [rad/s]', color='m')
+    ax.set_xlabel('Time [s]')
+    ax.set_ylabel('Linear velocity v [m/s]', color='g')
+    ax2.set_ylabel(r'Angular velocity $\omega$ [rad/s]', color='m')
     ax.tick_params(axis='y', labelcolor='g')
     ax2.tick_params(axis='y', labelcolor='m')
-    ax.set_title('Velocidades del cuerpo')
+    ax.set_title('Body velocities')
     lines = l1 + l2
     ax.legend(lines, [l.get_label() for l in lines], loc='best')
     ax.grid(True, alpha=0.3)
 
-    # --- Orientación ---
+    # --- Orientation ---
     ax = axes[1, 1]
     ax.plot(t, np.degrees(theta), 'k-', linewidth=2)
-    ax.set_xlabel('Tiempo [s]')
+    ax.set_xlabel('Time [s]')
     ax.set_ylabel(r'$\theta$ [deg]')
-    ax.set_title('Orientacion del robot')
+    ax.set_title('Robot orientation')
     ax.grid(True, alpha=0.3)
 
     plt.tight_layout()
     if save_path:
         plt.savefig(save_path, dpi=150, bbox_inches='tight')
-        print(f"  -> Figura guardada en {save_path}")
+        print(f"  -> Figure saved to {save_path}")
     return fig
 
 
 class MissionCoordinator:
     """
-    Máquina de estados global del reto.
+    Global state machine for the challenge.
 
-    Estados:
+    States:
         - HUSKY_PHASE
         - ANYMAL_PHASE
         - PUZZLEBOT_PHASE
@@ -298,13 +285,12 @@ class MissionCoordinator:
         self._set_box_world_center("C", 12.5, 1.3)
         
 
-        # Controladores de las primeras dos fases
+        # Controllers for the first two phases
         self.husky_controller = HuskyPusher(sim=self.sim, terrain="grass")
         self.anymal_controller = ANYmalGaitController(sim=self.sim)
 
         self.pb_names = ["pb1", "pb2", "pb3"]
 
-        # Ahora sí se despliegan en la zona de trabajo y pueden moverse por su cuenta
         self.pb_mobile: Dict[str, PuzzleBotMobile] = {
             name: PuzzleBotMobile(sim=self.sim, robot_name=name)
             for name in self.pb_names
@@ -315,22 +301,21 @@ class MissionCoordinator:
             for name in self.pb_names
         }
 
-        # Asignación explícita para cumplir orden C-B-A por time-slotting
-        # pb3 -> C (abajo), pb2 -> B (medio), pb1 -> A (arriba)
+        # pb3 -> C (bottom), pb2 -> B (middle), pb1 -> A (top)
         self.stack_plan = [
             ("pb3", "C", 0),
             ("pb2", "B", 1),
             ("pb1", "A", 2),
         ]
 
-        # Offset para que cada PuzzleBot se coloque a un lado de la caja antes de hacer grasp
+        # Offset so each PuzzleBot positions itself beside the box before grasping
         self.pick_standoff_offset = (-0.22, 0.00)
 
-        # Poses de colocación cercanas a la pila destino
+        # Placement poses close to the target stack
         self.place_standoff_positions = {
-            "pb1": (11.20, 2.35, math.radians(-90.0)),   # llega por arriba
-            "pb2": (10.75, 1.60, 0.0),                   # llega por la izquierda
-            "pb3": (11.20, 0.95, math.radians(90.0)),    # llega por abajo
+            "pb1": (11.20, 2.35, math.radians(-90.0)),   # approaches from above
+            "pb2": (10.75, 1.60, 0.0),                   # approaches from the left
+            "pb3": (11.20, 0.95, math.radians(90.0)),    # approaches from below
         }
 
         self.pb_wait_positions = {
@@ -339,25 +324,25 @@ class MissionCoordinator:
             "pb3": (10.0, 2.5, 0.0),
         }
 
-        # Logs por grasp
+        # Logs per grasp
         self.grasp_logs: Dict[str, List[GraspResult]] = {
             "pb1": [],
             "pb2": [],
             "pb3": [],
         }
 
-        # Altura virtual de apilado por nivel
+        # Virtual stacking height per level
         self.stack_heights = {
-            0: 0.135,   # C abajo
-            1: 0.165,   # B en medio
-            2: 0.195,   # A arriba
+            0: 0.135,   # C bottom
+            1: 0.165,   # B middle
+            2: 0.195,   # A top
         }
         self.train_collision_model()
         self.avoid_dir = {name: 1 for name in self.pb_names}
         self.pb_status = {name: "IDLE" for name in self.pb_names}
 
     def train_collision_model(self):
-        # Features: [distancia, diferencia_vel, diferencia_angulo]
+        # Features: [distance, vel_difference, angle_difference]
         X = np.array([
             [0.1, 0.5, 0.2],
             [0.2, 0.4, 0.3],
@@ -367,7 +352,7 @@ class MissionCoordinator:
             [0.8, 0.1, 0.1]
         ])
 
-        # 1 = alto riesgo, 0 = bajo
+        # 1 = high risk, 0 = low
         y = np.array([1, 1, 0, 0, 1, 0])
 
         model = LogisticRegression()
@@ -380,10 +365,10 @@ class MissionCoordinator:
         x1, y1, th1 = self.pb_mobile[robot1].get_pose()
         x2, y2, th2 = self.pb_mobile[robot2].get_pose()
 
-        # distancia
+        # distance
         dist = math.hypot(x1 - x2, y1 - y2)
 
-        # velocidades
+        # velocities
         log1 = self.pb_mobile[robot1].motion_log
         log2 = self.pb_mobile[robot2].motion_log
 
@@ -392,25 +377,24 @@ class MissionCoordinator:
 
         dv = abs(v1 - v2)
 
-        # orientación
+        # orientation
         dtheta = abs(wrap_angle(th1 - th2))
 
         X = np.array([[dist, dv, dtheta]])
         risk = self.collision_model.predict(X)[0]
 
-        return risk  # 0 o 1
+        return risk  # 0 or 1
 
     def _send_other_puzzlebots_to_wait(self, active_robot: str) -> None:
         """
-        Mueve a los PuzzleBots que no están trabajando a sus zonas de espera,
-        para que no invadan la trayectoria del robot activo.
+        Moves the PuzzleBots that are not working to their waiting zones,
+        so they don't invade the active robot's trajectory.
         """
         for robot_name in self.pb_names:
 
             if robot_name == active_robot:
                 continue
 
-            # NO mover robots que ya terminaron
             if self.pb_status.get(robot_name) == "DONE":
                 continue
 
@@ -432,8 +416,8 @@ class MissionCoordinator:
         max_steps_per_wp: int = 250
     ) -> None:
         """
-        Navega un PuzzleBot a través de una secuencia de waypoints.
-        Cada waypoint es (x, y, theta) y theta puede ser None.
+        Navigates a PuzzleBot through a sequence of waypoints.
+        Each waypoint is (x, y, theta) and theta can be None.
         """
         for i, (gx, gy, gtheta) in enumerate(waypoints):
             self._navigate_robot_to(
@@ -445,22 +429,18 @@ class MissionCoordinator:
                 max_steps=max_steps_per_wp
             )
 
-    # -------------------------------------------------------------------------
-    # Logging coordinador
-    # -------------------------------------------------------------------------
+    # Coordinator logging
 
     def _record(self, state: str, note: str = "") -> None:
         self.log.append(self.sim.time, state, note)
         self.sim.record_state(phase=state.lower(), note=note)
 
-    # -------------------------------------------------------------------------
-    # Fase 1: Husky
-    # -------------------------------------------------------------------------
+    # Phase 1: Husky
 
     def run_husky_phase(self, verbose: bool = True) -> None:
-        """Ejecuta la fase 1 completa."""
+        """Runs the complete phase 1."""
         t0 = self.sim.time
-        self._record("HUSKY_PHASE", "Inicio fase Husky")
+        self._record("HUSKY_PHASE", "Start of Husky phase")
 
         self.husky_log = self.husky_controller.run(verbose=verbose)
         husky_log = self.husky_log
@@ -468,25 +448,22 @@ class MissionCoordinator:
         self.metrics.husky_time = self.sim.time - t0
         self._record(
             "HUSKY_PHASE",
-            f"Fin fase Husky | boxes_cleared={self.sim.all_large_boxes_cleared()}"
+            f"End of Husky phase | boxes_cleared={self.sim.all_large_boxes_cleared()}"
         )
 
-        # Guardar figura resumen
         plot_husky_phase_results(
             sim=self.sim,
             log=husky_log,
-            title="Fase 1 - Husky: despeje del corredor",
-            save_path="coordinator_husky_phase.png"
+            title="Phase 1 - Husky: clearing the corridor",
+            save_path=str(PLOTS_DIR / "coordinator_husky_phase.png")
         )
 
-    # -------------------------------------------------------------------------
-    # Fase 2: ANYmal
-    # -------------------------------------------------------------------------
+    # Phase 2: ANYmal
 
     def run_anymal_phase(self, verbose: bool = True) -> None:
-        """Ejecuta la fase 2 completa."""
+        """Runs the complete phase 2."""
         t0 = self.sim.time
-        self._record("ANYMAL_PHASE", "Inicio fase ANYmal")
+        self._record("ANYMAL_PHASE", "Start of ANYmal phase")
 
         self.anymal_log = self.anymal_controller.run(verbose=verbose)
         anymal_log = self.anymal_log
@@ -500,7 +477,7 @@ class MissionCoordinator:
         self._record(
             "ANYMAL_PHASE",
             (
-                f"Fin fase ANYmal | reached={reached} | "
+                f"End of ANYmal phase | reached={reached} | "
                 f"err={self.metrics.anymal_final_error:.3f} m | "
                 f"detJ_viol={self.metrics.detJ_violations_anymal}"
             )
@@ -508,34 +485,30 @@ class MissionCoordinator:
 
         plot_anymal_phase_results(
             log=anymal_log,
-            title="ANYmal Fase 2: Marcha Trote",
-            save_path="coordinator_anymal_phase.png"
+            title="ANYmal Phase 2: Trot Gait",
+            save_path=str(PLOTS_DIR / "coordinator_anymal_phase.png")
         )
 
         if not reached:
             raise RuntimeError(
-                f"Fase ANYmal falló: no llegó a p_dest_anymal. "
-                f"Error final = {self.metrics.anymal_final_error:.3f} m"
+                f"ANYmal phase failed: did not reach p_dest_anymal. "
+                f"Final error = {self.metrics.anymal_final_error:.3f} m"
             )
 
-
-    # -------------------------------------------------------------------------
-    # Fase 3: PuzzleBots
-    # -------------------------------------------------------------------------
-
+    # Phase 3: PuzzleBots
 
     def _get_box_world_center(self, box_name: str) -> Tuple[float, float]:
-        """Centro XY de una caja pequeña en el mundo."""
+        """XY center of a small box in the world."""
         return self.sim.boxes[box_name].center()
 
     def _set_box_world_center(self, box_name: str, cx: float, cy: float) -> None:
-        """Reposiciona caja pequeña usando su centro."""
+        """Repositions a small box using its center."""
         self.sim.boxes[box_name].set_center(cx, cy)
 
     def _stack_point_for_level(self, level: int) -> Tuple[float, float]:
         """
-        Punto XY de apilado.
-        En esta simulación 2D el XY es el mismo; el nivel se maneja virtualmente.
+        XY stacking point.
+        In this 2D simulation the XY is the same; the level is handled virtually.
         """
         return self.sim.stack_point
     
@@ -550,9 +523,7 @@ class MissionCoordinator:
 
             x, y, theta = controller.get_pose()
 
-            # ======================================================
-            # 1. DIRECCIÓN AL OBJETIVO
-            # ======================================================
+            # Direction to goal
             dx = gx - x
             dy = gy - y
 
@@ -563,20 +534,17 @@ class MissionCoordinator:
                 dir_goal_x = dx / dist_goal
                 dir_goal_y = dy / dist_goal
 
-            # ======================================================
-            # 2. FUERZA DE EVASIÓN (ROBOTS + CAJAS)
-            # ======================================================
+            # Avoidance force (robots + boxes)
             avoid_x = 0.0
             avoid_y = 0.0
 
-            # -------- ROBOTS --------
             for other in self.pb_names:
                 if other == robot_name:
                     continue
 
                 x2, y2, th2 = self.pb_mobile[other].get_pose()
 
-                # features para ML
+                # features for ML
                 dist = math.hypot(x - x2, y - y2)
 
                 log1 = self.pb_mobile[robot_name].motion_log
@@ -591,10 +559,10 @@ class MissionCoordinator:
 
                 X_ml = np.array([[dist, dv, dtheta]])
 
-                # regresión logística
+                # logistic regression
                 risk_prob = self.collision_model.predict_proba(X_ml)[0][1]
 
-                # decisión usando ML
+                # decision using ML
                 if risk_prob > 0.5:
 
                     rx = x - x2
@@ -609,9 +577,8 @@ class MissionCoordinator:
                         avoid_x += risk_prob * rx
                         avoid_y += risk_prob * ry
 
-                    print(f"[ML] {robot_name} vs {other} -> riesgo={risk_prob:.2f}")
+                    print(f"[ML] {robot_name} vs {other} -> risk={risk_prob:.2f}")
 
-            # -------- CAJAS --------
             for box_name, box in self.sim.boxes.items():
 
                 if getattr(box, "stacked", False):
@@ -638,26 +605,21 @@ class MissionCoordinator:
                         avoid_x += risk * rx
                         avoid_y += risk * ry
 
-                    print(f"[ML] {robot_name} evita caja {box_name} | risk={risk:.2f}")
+                    print(f"[ML] {robot_name} avoids box {box_name} | risk={risk:.2f}")
 
-            # normalizar evasión
+            # normalize avoidance
             norm_avoid = math.hypot(avoid_x, avoid_y)
             if norm_avoid > 1e-6:
                 avoid_x /= norm_avoid
                 avoid_y /= norm_avoid
 
-            # ======================================================
-            # 3. MEZCLA (CLAVE)
-            # ======================================================
-            # si no hay riesgo → puro goal
             if norm_avoid < 1e-6:
                 mix_x = dir_goal_x
                 mix_y = dir_goal_y
             else:
-                # peso dinámico
-                alpha = 0.7   # hacia goal
+                # dynamic weight
+                alpha = 0.7   # toward goal
 
-                # si está muy cerca del objetivo → menos evasión
                 if dist_goal < 0.5:
                     alpha = 1.0
                     avoid_x = 0.0
@@ -671,22 +633,18 @@ class MissionCoordinator:
                     mix_x /= norm_mix
                     mix_y /= norm_mix
 
-            # ======================================================
-            # 4. PASO CORTO (evita curvas grandes)
-            # ======================================================
+            # avoids large curves
             step_size = 0.25
 
             gx_new = x + mix_x * step_size
             gy_new = y + mix_y * step_size
 
-            # ======================================================
-            # 5. MOVIMIENTO
-            # ======================================================
+            # Movement
             done = controller.step_to_pose(gx_new, gy_new, None)
 
             self.sim.step(
                 phase="puzzlebot",
-                note=f"{robot_name} navegando suave | {phase_note}"
+                note=f"{robot_name} navigating smoothly | {phase_note}"
             )
 
             if done:
@@ -697,18 +655,16 @@ class MissionCoordinator:
                             level: int) -> None:
         controller = self.pb_mobile[robot_name]
 
-        # Punto final de aproximación de ese robot a la pila
+        # Final approach point for this robot to the stack
         gx, gy, gth = self.place_standoff_positions[robot_name]
 
-        # Waypoint intermedio común para entrar ordenadamente al área de la pila
-        # y luego aproximarse desde su lado correspondiente
-        # posición actual del robot
+        # current robot position
         x, y, _ = controller.get_pose()
 
-        # punto de stack final
+        # final stack point
         gx, gy, gth = self.place_standoff_positions[robot_name]
 
-        # vector hacia el stack
+        # vector toward the stack
         dx = gx - x
         dy = gy - y
         dist = math.hypot(dx, dy)
@@ -717,22 +673,22 @@ class MissionCoordinator:
             dx /= dist
             dy /= dist
 
-        # offset lateral (lado de entrada)
+        # lateral offset (entry side)
         side_offset = 0.35
 
         # perpendicular
         px = -dy
         py = dx
 
-        # elegir lado según robot
+        # choose side based on robot
         if robot_name == "pb1":
-            side = 1   # arriba
+            side = 1   # above
         elif robot_name == "pb2":
-            side = -1  # izquierda
+            side = -1  # left
         else:
-            side = 1   # abajo
+            side = 1   # below
 
-        # waypoint dinámico
+        # dynamic waypoint
         wx = gx + side * px * side_offset
         wy = gy + side * py * side_offset
 
@@ -746,19 +702,19 @@ class MissionCoordinator:
                 done = controller.step_to_pose(wp_x, wp_y, wp_th)
                 x, y, theta = controller.get_pose()
 
-                # La caja acompaña al robot durante el transporte
+                # The box follows the robot during transport
                 attach_x = x + 0.12 * math.cos(theta)
                 attach_y = y + 0.12 * math.sin(theta)
                 self._set_box_world_center(box_name, attach_x, attach_y)
 
                 self.sim.step(
                     phase="puzzlebot",
-                    note=f"{robot_name} transportando {box_name}"
+                    note=f"{robot_name} transporting {box_name}"
                 )
                 if done:
                     break
 
-        # Dejar primero la caja cerca de la pila desde su lado de aproximación
+        # First leave the box near the stack, from its approach side
         x, y, theta = controller.get_pose()
         preplace_x = target_x - 0.05 * math.cos(theta)
         preplace_y = target_y - 0.05 * math.sin(theta)
@@ -766,32 +722,32 @@ class MissionCoordinator:
 
         self.sim.step(
             phase="puzzlebot",
-            note=f"{robot_name} acercó {box_name} a la pila desde su lado"
+            note=f"{robot_name} brought {box_name} close to the stack from its side"
         )
 
-        # Colocación final exacta
+        # Exact final placement
         self._set_box_world_center(box_name, target_x, target_y)
         self.sim.boxes[box_name].stacked = True
         self.sim.step(
             phase="puzzlebot",
-            note=f"{robot_name} colocó {box_name} en nivel {level}"
+            note=f"{robot_name} placed {box_name} at level {level}"
         )
 
 
     def _execute_single_stack_task(self, robot_name: str, box_name: str, level: int) -> None:
         """
-        Ejecuta una tarea individual de apilado para un PuzzleBot ya desplegado
-        en la zona de trabajo.
+        Executes an individual stacking task for a PuzzleBot already deployed
+        in the work zone.
         """
         self.pb_status[robot_name] = "ACTIVE"
-        # Mandar a los otros robots a esperar antes de que este empiece
+        # Send the other robots to wait before this one starts
         self._send_other_puzzlebots_to_wait(active_robot=robot_name)
 
         box = self.sim.boxes[box_name]
         bx, by = box.center()
-        
 
-        # 1) Navegar a posición de toma
+
+        # 1) Navigate to pick-up position
         pick_x = bx + self.pick_standoff_offset[0]
         pick_y = by + self.pick_standoff_offset[1]
         pick_theta = 0.0
@@ -804,7 +760,7 @@ class MissionCoordinator:
             phase_note=f"approach {box_name}"
         )
 
-        # 2) Grasp con el brazo
+        # 2) Grasp with the arm
         arm = self.pb_arms[robot_name]
         arm.q = np.array([0.0, 0.15, -0.60], dtype=float)
 
@@ -818,10 +774,10 @@ class MissionCoordinator:
 
         self.sim.step(
             phase="puzzlebot",
-            note=f"{robot_name} hizo grasp de {box_name}"
+            note=f"{robot_name} grasped {box_name}"
         )
 
-        # 3) Transportar la caja hasta la pila
+        # 3) Transport the box to the stack
         sx, sy = self._stack_point_for_level(level)
         self._move_box_with_robot(
             robot_name=robot_name,
@@ -831,7 +787,7 @@ class MissionCoordinator:
             level=level
         )
 
-        # 4) Colocar en la pila con control de fuerza
+        # 4) Place on the stack with force control
         local_place = np.array([0.09, 0.00, self.stack_heights[level]], dtype=float)
         grasp_result_place = arm.grasp_box(
             box_pos=local_place,
@@ -842,29 +798,29 @@ class MissionCoordinator:
 
         self.sim.step(
             phase="puzzlebot",
-            note=f"{robot_name} aplicó tau=J^T f para colocar {box_name}"
+            note=f"{robot_name} applied tau=J^T f to place {box_name}"
         )
         self.pb_status[robot_name] = "DONE"
 
     def run_puzzlebot_phase(self, verbose: bool = True) -> None:
         """
-        Ejecuta la fase 3 completa en turnos.
-        Esto cumple la recomendación del PDF de usar time-slotting
-        como la forma más simple de coordinación.
+        Runs the complete phase 3 in turns.
+        This follows the PDF's recommendation to use time-slotting
+        as the simplest form of coordination.
         """
         t0 = self.sim.time
-        self._record("PUZZLEBOT_PHASE", "Inicio fase PuzzleBots")
+        self._record("PUZZLEBOT_PHASE", "Start of PuzzleBots phase")
 
-        # Time-slotting: un robot por vez
+        # Time-slotting: one robot at a time
         for robot_name, box_name, level in self.stack_plan:
             if verbose:
-                print(f"[puzzlebot] {robot_name} -> {box_name} -> nivel {level}")
+                print(f"[puzzlebot] {robot_name} -> {box_name} -> level {level}")
 
             self._execute_single_stack_task(robot_name, box_name, level)
 
         self.metrics.puzzlebot_time = self.sim.time - t0
 
-        # Error final de apilado en XY
+        # Final stacking error in XY
         sx, sy = self.sim.stack_point
         errs = []
         for name in ("A", "B", "C"):
@@ -877,20 +833,18 @@ class MissionCoordinator:
         self._record(
             "PUZZLEBOT_PHASE",
             (
-                f"Fin fase PuzzleBots | stack_success={self.metrics.stack_success} | "
+                f"End of PuzzleBots phase | stack_success={self.metrics.stack_success} | "
                 f"stack_err={self.metrics.stack_final_error:.3f} m"
             )
         )
 
-    # -------------------------------------------------------------------------
-    # Misión completa
-    # -------------------------------------------------------------------------
+    # Complete mission
 
     def run_mission(self, verbose: bool = True) -> CoordinatorMetrics:
         """
-        Ejecuta toda la misión de forma secuencial.
+        Runs the entire mission sequentially.
         """
-        self._record("START", "Inicio misión completa")
+        self._record("START", "Start of complete mission")
 
         self.run_husky_phase(verbose=verbose)
         self.run_anymal_phase(verbose=verbose)
@@ -899,21 +853,19 @@ class MissionCoordinator:
         self.state = "DONE"
         self.metrics.total_time = self.sim.time
 
-        self._record("DONE", "Misión completa finalizada")
+        self._record("DONE", "Complete mission finished")
         return self.metrics
 
-    # -------------------------------------------------------------------------
-    # Reportes y figuras
-    # -------------------------------------------------------------------------
+    # Reports and figures
 
     def plot_coordinator_summary(self, save_path: Optional[str] = None):
         """
-        Figura resumen del coordinador y métricas globales.
+        Summary figure of the coordinator and global metrics.
         """
         fig, axes = plt.subplots(2, 2, figsize=(13, 9))
-        fig.suptitle("Resumen global del mini reto", fontsize=15, fontweight="bold")
+        fig.suptitle("Global summary of the mini challenge", fontsize=15, fontweight="bold")
 
-        # 1) timeline de estados
+        # 1) state timeline
         ax = axes[0, 0]
         state_to_num = {
             "START": 0,
@@ -924,14 +876,14 @@ class MissionCoordinator:
         }
         y = [state_to_num.get(s, -1) for s in self.log.state]
         ax.step(self.log.t, y, where="post", linewidth=2)
-        ax.set_title("Timeline de estados")
-        ax.set_xlabel("Tiempo [s]")
-        ax.set_ylabel("Estado")
+        ax.set_title("State timeline")
+        ax.set_xlabel("Time [s]")
+        ax.set_ylabel("State")
         ax.set_yticks(list(state_to_num.values()))
         ax.set_yticklabels(list(state_to_num.keys()))
         ax.grid(True, alpha=0.3)
 
-        # 2) tiempos por fase
+        # 2) time per phase
         ax = axes[0, 1]
         labels = ["Husky", "ANYmal", "PuzzleBots"]
         vals = [
@@ -940,20 +892,20 @@ class MissionCoordinator:
             self.metrics.puzzlebot_time,
         ]
         ax.bar(labels, vals)
-        ax.set_title("Tiempo por fase")
-        ax.set_ylabel("Tiempo [s]")
+        ax.set_title("Time per phase")
+        ax.set_ylabel("Time [s]")
         ax.grid(True, axis="y", alpha=0.3)
 
-        # 3) métricas numéricas
+        # 3) numeric metrics
         ax = axes[1, 0]
         ax.axis("off")
         text = (
-            f"Tiempo total: {self.metrics.total_time:.2f} s\n"
-            f"Error final ANYmal: {self.metrics.anymal_final_error:.3f} m\n"
-            f"Violaciones det(J) ANYmal: {self.metrics.detJ_violations_anymal}\n"
-            f"Error final apilado: {self.metrics.stack_final_error:.3f} m\n"
-            f"Colisiones PuzzleBots: {self.metrics.puzzlebot_collisions}\n"
-            f"Apilado correcto C-B-A: {self.metrics.stack_success}"
+            f"Total time: {self.metrics.total_time:.2f} s\n"
+            f"ANYmal final error: {self.metrics.anymal_final_error:.3f} m\n"
+            f"ANYmal det(J) violations: {self.metrics.detJ_violations_anymal}\n"
+            f"Final stacking error: {self.metrics.stack_final_error:.3f} m\n"
+            f"PuzzleBot collisions: {self.metrics.puzzlebot_collisions}\n"
+            f"Correct C-B-A stacking: {self.metrics.stack_success}"
         )
         ax.text(
             0.05, 0.95, text,
@@ -962,9 +914,9 @@ class MissionCoordinator:
             fontsize=11,
             bbox=dict(boxstyle="round", facecolor="white", alpha=0.85)
         )
-        ax.set_title("Métricas globales")
+        ax.set_title("Global metrics")
 
-        # 4) torques finales de grasp/place por robot
+        # 4) final grasp/place torques per robot
         ax = axes[1, 1]
         robot_names = []
         tau_norms = []
@@ -977,74 +929,72 @@ class MissionCoordinator:
             ax.bar(range(len(tau_norms)), tau_norms)
             ax.set_xticks(range(len(tau_norms)))
             ax.set_xticklabels(robot_names, rotation=45)
-        ax.set_title(r"Norma de torques finales ($\tau = J^T f$)")
+        ax.set_title(r"Final torque norm ($\tau = J^T f$)")
         ax.set_ylabel("||tau|| [N·m]")
         ax.grid(True, axis="y", alpha=0.3)
 
         plt.tight_layout()
         if save_path:
             plt.savefig(save_path, dpi=150, bbox_inches="tight")
-            print(f"  -> Figura guardada en {save_path}")
+            print(f"  -> Figure saved to {save_path}")
         return fig
 
     def show_final_world(self, save_path: Optional[str] = None):
-        """Muestra snapshot final del mundo."""
+        """Shows the final snapshot of the world."""
         fig, ax = self.sim.draw_world(
             phase="done",
-            note="Estado final de la misión",
+            note="Final state of the mission",
             show_lidar=False
         )
         if save_path:
             fig.savefig(save_path, dpi=150, bbox_inches="tight")
-            print(f"  -> Figura guardada en {save_path}")
+            print(f"  -> Figure saved to {save_path}")
         return fig
 
     def save_animation(self, save_path: Optional[str] = None):
         """
-        Genera la animación completa desde el log global del mundo.
+        Generates the complete animation from the global world log.
         """
         return self.sim.animate_log(interval_ms=50, save_path=save_path)
 
 
-# =============================================================================
-# Demo principal
-# =============================================================================
+# Main demo
 
 def demo_coordinator():
     """
-    Demo de la misión completa.
+    Demo of the complete mission.
     """
     coordinator = MissionCoordinator(dt=0.04)
     metrics = coordinator.run_mission(verbose=True)
 
     print("\n" + "=" * 70)
-    print("RESUMEN FINAL DEL RETO")
+    print("FINAL CHALLENGE SUMMARY")
     print("=" * 70)
-    print(f"Tiempo Husky:       {metrics.husky_time:.2f} s")
-    print(f"Tiempo ANYmal:      {metrics.anymal_time:.2f} s")
-    print(f"Tiempo PuzzleBots:  {metrics.puzzlebot_time:.2f} s")
-    print(f"Tiempo total:       {metrics.total_time:.2f} s")
-    print(f"Error final ANYmal: {metrics.anymal_final_error:.3f} m")
-    print(f"Violaciones det(J): {metrics.detJ_violations_anymal}")
-    print(f"Error apilado:      {metrics.stack_final_error:.3f} m")
-    print(f"Apilado correcto:   {metrics.stack_success}")
+    print(f"Husky time:         {metrics.husky_time:.2f} s")
+    print(f"ANYmal time:        {metrics.anymal_time:.2f} s")
+    print(f"PuzzleBots time:    {metrics.puzzlebot_time:.2f} s")
+    print(f"Total time:         {metrics.total_time:.2f} s")
+    print(f"ANYmal final error: {metrics.anymal_final_error:.3f} m")
+    print(f"det(J) violations:  {metrics.detJ_violations_anymal}")
+    print(f"Stacking error:     {metrics.stack_final_error:.3f} m")
+    print(f"Correct stacking:   {metrics.stack_success}")
 
-    coordinator.plot_coordinator_summary(save_path="coordinator_summary.png")
-    coordinator.show_final_world(save_path="coordinator_final_world.png")
+    coordinator.plot_coordinator_summary(save_path=str(PLOTS_DIR / "coordinator_summary.png"))
+    coordinator.show_final_world(save_path=str(PLOTS_DIR / "coordinator_final_world.png"))
 
-    # --- Gráficas estilo base/demo ---
+    # --- Base/demo style plots ---
     if coordinator.husky_log is not None:
         plot_husky_demo_style(
             coordinator.husky_log,
-            title="Husky Fase 1: Despeje del corredor",
-            save_path="coordinator_husky_demo_style.png"
+            title="Husky Phase 1: Clearing the Corridor",
+            save_path=str(PLOTS_DIR / "coordinator_husky_demo_style.png")
         )
 
     if coordinator.anymal_log is not None:
         plot_anymal_phase_results(
             log=coordinator.anymal_log,
-            title="ANYmal Fase 2: Marcha Trote",
-            save_path="coordinator_anymal_demo_style.png"
+            title="ANYmal Phase 2: Trot Gait",
+            save_path=str(PLOTS_DIR / "coordinator_anymal_demo_style.png")
         )
 
     for pb_name in coordinator.pb_names:
@@ -1052,11 +1002,11 @@ def demo_coordinator():
         if len(pb_log['t']) > 0:
             plot_puzzlebot_demo_style(
                 pb_log,
-                title=f"PuzzleBot {pb_name.upper()} Fase 3",
-                save_path=f"coordinator_{pb_name}_demo_style.png"
+                title=f"PuzzleBot {pb_name.upper()} Phase 3",
+                save_path=str(PLOTS_DIR / f"coordinator_{pb_name}_demo_style.png")
             )
 
-    # Animación opcional
+    # Optional animation
     anim = coordinator.save_animation(save_path=None)
 
     plt.show()

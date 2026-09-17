@@ -1,29 +1,23 @@
 """
 sim.py
 ------
-Simulador 2D del escenario completo del mini reto de Robots Móviles.
+2D simulator of the full mini-challenge scenario for Mobile Robots.
 
-Este módulo define:
-- El mapa del almacén
-- El corredor bloqueado
-- Las cajas grandes que empuja el Husky
-- Las cajas pequeñas A, B, C para apilar
-- Los estados de los robots en 2D
-- Utilidades geométricas, colisiones básicas y logging
-- Visualización estática y animación en matplotlib
+This module defines:
+- The warehouse map
+- The blocked corridor
+- The large boxes pushed by the Husky
+- The small boxes A, B, C to be stacked
+- The 2D states of the robots
+- Geometric utilities, basic collisions and logging
+- Static visualization and matplotlib animation
 
-Diseñado para integrarse con:
+Designed to integrate with:
     1) husky_pusher.py
     2) anymal_gait.py
     3) puzzlebot_arm.py
     4) coordinator.py
 
-Autores: 
-Josue Ureña Valencia				IRS | A01738940
-César Arellano Arellano			    IRS | A00839373
-Jose Eduardo Sanchez Martinez		IRS | A01738476
-Rafael André Gamiz Salazar			IRS | A00838280
-Curso: TE3002B - Robots Móviles Terrestres
 """
 
 from __future__ import annotations
@@ -39,21 +33,21 @@ from matplotlib.animation import FuncAnimation
 
 
 # =============================================================================
-# Utilidades geométricas
+# Geometric utilities
 # =============================================================================
 
 def wrap_angle(theta: float) -> float:
-    """Normaliza un ángulo al intervalo [-pi, pi]."""
+    """Normalizes an angle to the interval [-pi, pi]."""
     return math.atan2(math.sin(theta), math.cos(theta))
 
 
 def distance(p1: Tuple[float, float], p2: Tuple[float, float]) -> float:
-    """Distancia euclidiana 2D."""
+    """2D Euclidean distance."""
     return math.hypot(p2[0] - p1[0], p2[1] - p1[1])
 
 
 def clamp(value: float, low: float, high: float) -> float:
-    """Satura un valor en [low, high]."""
+    """Clamps a value to [low, high]."""
     return max(low, min(high, value))
 
 
@@ -65,32 +59,32 @@ def point_in_rect(
     rw: float,
     rh: float
 ) -> bool:
-    """Indica si un punto está dentro de un rectángulo axis-aligned."""
+    """Indicates whether a point is inside an axis-aligned rectangle."""
     return (rx <= px <= rx + rw) and (ry <= py <= ry + rh)
 
 
 def rect_center(x: float, y: float, w: float, h: float) -> Tuple[float, float]:
-    """Centro geométrico de un rectángulo."""
+    """Geometric center of a rectangle."""
     return (x + w / 2.0, y + h / 2.0)
 
 
 # =============================================================================
-# Entidades del mundo
+# World entities
 # =============================================================================
 
 @dataclass
 class Box2D:
     """
-    Caja rectangular en 2D.
+    Rectangular box in 2D.
 
-    Atributos:
-        name: identificador
-        x, y: esquina inferior izquierda [m]
-        w, h: dimensiones [m]
-        kind: "large" o "small"
-        color: color para dibujar
-        movable: si puede moverse
-        stacked: si ya forma parte de la pila final
+    Attributes:
+        name: identifier
+        x, y: bottom-left corner [m]
+        w, h: dimensions [m]
+        kind: "large" or "small"
+        color: color for drawing
+        movable: whether it can be moved
+        stacked: whether it is already part of the final stack
     """
     name: str
     x: float
@@ -103,11 +97,11 @@ class Box2D:
     stacked: bool = False
 
     def center(self) -> Tuple[float, float]:
-        """Retorna el centro de la caja."""
+        """Returns the center of the box."""
         return rect_center(self.x, self.y, self.w, self.h)
 
     def as_patch(self, alpha: float = 0.85) -> Rectangle:
-        """Genera el patch de matplotlib para dibujar la caja."""
+        """Generates the matplotlib patch to draw the box."""
         return Rectangle(
             (self.x, self.y),
             self.w,
@@ -119,13 +113,13 @@ class Box2D:
         )
 
     def move_by(self, dx: float, dy: float) -> None:
-        """Desplaza la caja."""
+        """Moves the box."""
         if self.movable:
             self.x += dx
             self.y += dy
 
     def set_center(self, cx: float, cy: float) -> None:
-        """Reposiciona la caja usando su centro."""
+        """Repositions the box using its center."""
         self.x = cx - self.w / 2.0
         self.y = cy - self.h / 2.0
 
@@ -133,15 +127,15 @@ class Box2D:
 @dataclass
 class RobotState:
     """
-    Estado simplificado de un robot móvil en 2D.
+    Simplified state of a mobile robot in 2D.
 
-    Atributos:
-        name: nombre del robot
-        x, y, theta: pose en el plano
-        radius: radio de colisión aproximado
-        color: color para dibujarlo
-        active: si debe mostrarse
-        payload: texto descriptivo opcional
+    Attributes:
+        name: robot name
+        x, y, theta: pose in the plane
+        radius: approximate collision radius
+        color: color for drawing it
+        active: whether it should be shown
+        payload: optional descriptive text
     """
     name: str
     x: float
@@ -153,11 +147,11 @@ class RobotState:
     payload: Optional[str] = None
 
     def pose(self) -> Tuple[float, float, float]:
-        """Retorna la pose actual."""
+        """Returns the current pose."""
         return (self.x, self.y, self.theta)
 
     def set_pose(self, x: float, y: float, theta: float) -> None:
-        """Actualiza la pose del robot."""
+        """Updates the robot's pose."""
         self.x = x
         self.y = y
         self.theta = wrap_angle(theta)
@@ -166,9 +160,9 @@ class RobotState:
 @dataclass
 class WorldLog:
     """
-    Estructura de logging del escenario.
+    Logging structure for the scenario.
 
-    Guarda snapshots temporales del mundo para graficación y animación.
+    Stores temporal snapshots of the world for plotting and animation.
     """
     t: List[float] = field(default_factory=list)
     robot_states: List[Dict[str, Tuple[float, float, float]]] = field(default_factory=list)
@@ -184,7 +178,7 @@ class WorldLog:
         phase: str,
         note: str = ""
     ) -> None:
-        """Agrega un snapshot del estado actual."""
+        """Adds a snapshot of the current state."""
         self.t.append(t)
         self.robot_states.append(
             {name: (r.x, r.y, r.theta) for name, r in robots.items()}
@@ -197,67 +191,67 @@ class WorldLog:
 
 
 # =============================================================================
-# Escenario principal del reto
+# Main challenge scenario
 # =============================================================================
 
 class WarehouseSim:
     """
-    Simulador 2D del almacén colaborativo.
+    2D simulator of the collaborative warehouse.
 
-    El mundo incluye:
-    - zona de inicio
-    - corredor (rectángulo de 6x2 m)
-    - zona de trabajo
-    - tres cajas grandes bloqueando el corredor
-    - tres cajas pequeñas A, B, C
-    - punto destino de apilado
+    The world includes:
+    - start zone
+    - corridor (6x2 m rectangle)
+    - work zone
+    - three large boxes blocking the corridor
+    - three small boxes A, B, C
+    - stacking destination point
 
-    Coordenadas del mundo:
-        X hacia la derecha
-        Y hacia arriba
+    World coordinates:
+        X pointing right
+        Y pointing up
     """
 
     def __init__(self, dt: float = 0.05):
         self.dt = dt
         self.time = 0.0
 
-        # Dimensiones generales del mundo
+        # General world dimensions
         self.world_xmin = -1.0
         self.world_xmax = 13.5
         self.world_ymin = -1.5
         self.world_ymax = 5.5
 
-        # Rectángulos de referencia
+        # Reference rectangles
         self.start_zone = (0.0, 1.2, 1.8, 2.0)         # x, y, w, h
-        self.corridor = (2.0, 1.2, 6.0, 2.0)           # rectángulo de 6x2 m
+        self.corridor = (2.0, 1.2, 6.0, 2.0)           # 6x2 m rectangle
         self.work_zone = (9.0, 0.6, 3.5, 3.6)
 
-        # Punto destino ANYmal
+        # ANYmal destination point
         self.anymal_goal = (11.0, 3.6)
 
-        # Punto destino de apilado C-B-A
+        # C-B-A stacking destination point
         self.stack_point = (11.4, 1.6)
 
-        # Robots del escenario
+        # Scenario robots
         self.robots: Dict[str, RobotState] = {}
         self._init_robots()
 
-        # Cajas grandes y pequeñas
+        # Large and small boxes
         self.boxes: Dict[str, Box2D] = {}
         self._init_boxes()
 
-        # Historial temporal del mundo
+        # World's temporal history
         self.log = WorldLog()
 
-        # Configuración visual
-        self.title = "Mini Reto - Almacén colaborativo"
+        # Visual configuration
+        self.title = "Mini Challenge - Collaborative Warehouse"
 
     # -------------------------------------------------------------------------
-    # Inicialización
+    # Initialization
     # -------------------------------------------------------------------------
 
     def _init_robots(self) -> None:
-        """Inicializa los robots del escenario."""
+        """Initializes the scenario robots."""
         self.robots["husky"] = RobotState(
             name="husky",
             x=0.8,
@@ -307,8 +301,8 @@ class WarehouseSim:
         )
 
     def _init_boxes(self) -> None:
-        """Inicializa las cajas grandes del corredor y las pequeñas del área de trabajo."""
-        # Cajas grandes que bloquean el corredor
+        """Initializes the large corridor boxes and the small boxes in the work area."""
+        # Large boxes blocking the corridor
         self.boxes["B1"] = Box2D(
             name="B1",
             x=4.0,
@@ -337,7 +331,7 @@ class WarehouseSim:
             color="#CD853F"
         )
 
-        # Cajas pequeñas del apilado
+        # Small stacking boxes
         self.boxes["A"] = Box2D(
             name="A",
             x=10.0,
@@ -367,11 +361,11 @@ class WarehouseSim:
         )
 
     # -------------------------------------------------------------------------
-    # Utilidades de escenario
+    # Scenario utilities
     # -------------------------------------------------------------------------
 
     def reset(self) -> None:
-        """Reinicia por completo el escenario a su estado inicial."""
+        """Fully resets the scenario to its initial state."""
         self.time = 0.0
         self.log = WorldLog()
         self._init_robots()
@@ -379,16 +373,16 @@ class WarehouseSim:
 
     def step(self, n: int = 1, phase: str = "idle", note: str = "") -> None:
         """
-        Avanza el tiempo del mundo y guarda snapshots.
+        Advances the world time and stores snapshots.
 
-        No integra dinámica por sí mismo; se usa como reloj central.
+        Does not integrate dynamics by itself; used as the central clock.
         """
         for _ in range(n):
             self.time += self.dt
             self.record_state(phase=phase, note=note)
 
     def record_state(self, phase: str = "idle", note: str = "") -> None:
-        """Guarda el estado actual del mundo en el log."""
+        """Stores the current world state in the log."""
         self.log.append(
             t=self.time,
             robots=self.robots,
@@ -398,33 +392,33 @@ class WarehouseSim:
         )
 
     def set_robot_pose(self, name: str, x: float, y: float, theta: float) -> None:
-        """Actualiza la pose de un robot por nombre."""
+        """Updates a robot's pose by name."""
         if name not in self.robots:
-            raise KeyError(f"Robot '{name}' no existe.")
+            raise KeyError(f"Robot '{name}' does not exist.")
         self.robots[name].set_pose(x, y, theta)
 
     def move_robot_by(self, name: str, dx: float, dy: float, dtheta: float = 0.0) -> None:
-        """Desplaza incrementalmente un robot."""
+        """Moves a robot incrementally."""
         if name not in self.robots:
-            raise KeyError(f"Robot '{name}' no existe.")
+            raise KeyError(f"Robot '{name}' does not exist.")
         robot = self.robots[name]
         robot.set_pose(robot.x + dx, robot.y + dy, robot.theta + dtheta)
 
     def robot_to_box_distance(self, robot_name: str, box_name: str) -> float:
-        """Distancia entre el centro del robot y el centro de una caja."""
+        """Distance between the robot's center and a box's center."""
         robot = self.robots[robot_name]
         box = self.boxes[box_name]
         return distance((robot.x, robot.y), box.center())
 
     def is_box_out_of_corridor(self, box_name: str) -> bool:
         """
-        Verifica si una caja quedó completamente fuera del rectángulo del corredor.
+        Checks whether a box has ended up completely outside the corridor rectangle.
 
-        La caja solo se considera fuera si su rectángulo ya no intersecta
-        en absoluto con el rectángulo del corredor.
+        The box is only considered outside if its rectangle no longer intersects
+        the corridor rectangle at all.
         """
         if box_name not in self.boxes:
-            raise KeyError(f"Caja '{box_name}' no existe.")
+            raise KeyError(f"Box '{box_name}' does not exist.")
 
         box = self.boxes[box_name]
         cx, cy, cw, ch = self.corridor
@@ -449,26 +443,26 @@ class WarehouseSim:
         return not intersects
 
     def all_large_boxes_cleared(self) -> bool:
-        """Indica si B1, B2 y B3 ya están fuera del corredor."""
+        """Indicates whether B1, B2 and B3 are already out of the corridor."""
         targets = ["B1", "B2", "B3"]
         return all(self.is_box_out_of_corridor(name) for name in targets)
 
     def anymal_goal_error(self) -> float:
-        """Error euclidiano del ANYmal respecto al objetivo final."""
+        """Euclidean error of the ANYmal with respect to the final goal."""
         anymal = self.robots["anymal"]
         return distance((anymal.x, anymal.y), self.anymal_goal)
 
     def stack_order_is_correct(self, tol_xy: float = 0.05, tol_z_virtual: float = 1e-9) -> bool:
         """
-        Verificación simplificada del apilado C-B-A.
+        Simplified verification of the C-B-A stacking.
 
-        En esta simulación 2D no modelamos altura física real en el mundo.
-        En vez de eso, consideramos que:
-        - las cajas deben quedar centradas en stack_point
-        - y cada una debe marcarse como 'stacked'
-        - coordinator.py llevará el conteo de niveles
+        In this 2D simulation we do not model real physical height in the world.
+        Instead, we consider that:
+        - the boxes must end up centered on stack_point
+        - and each one must be marked as 'stacked'
+        - coordinator.py will keep track of the level count
 
-        Esta función valida la proyección XY.
+        This function validates the XY projection.
         """
         sx, sy = self.stack_point
         for name in ("A", "B", "C"):
@@ -482,16 +476,16 @@ class WarehouseSim:
 
     def activate_puzzlebots_at_work_zone(self) -> None:
         """
-        Despliega los 3 PuzzleBots cerca del ANYmal cuando llega a la zona de trabajo.
-        La idea es que se vean como si se bajaran del robot, no que aparezcan
-        mágicamente en posiciones lejanas.
+        Deploys the 3 PuzzleBots near the ANYmal when it reaches the work zone.
+        The idea is that they look like they are getting off the robot, not that
+        they appear magically at distant positions.
         """
         anymal = self.robots["anymal"]
 
-        # Offsets locales alrededor del ANYmal para "bajarse"
-        # pb1: frente-derecha
-        # pb2: frente-izquierda
-        # pb3: atrás
+        # Local offsets around the ANYmal to "get off"
+        # pb1: front-right
+        # pb2: front-left
+        # pb3: back
         local_offsets = {
             "pb1": (+0.28, +0.18),
             "pb2": (+0.28, -0.18),
@@ -514,11 +508,11 @@ class WarehouseSim:
 
     def sync_puzzlebots_on_anymal(self, offsets: Optional[Dict[str, Tuple[float, float]]] = None) -> None:
         """
-        Coloca los 3 PuzzleBots montados sobre el ANYmal usando offsets 2D
-        respecto al centro del robot.
+        Places the 3 PuzzleBots mounted on the ANYmal using 2D offsets
+        relative to the robot's center.
 
         offsets:
-            diccionario con desplazamientos locales (dx, dy) en el marco del ANYmal.
+            dictionary with local displacements (dx, dy) in the ANYmal's frame.
         """
         if offsets is None:
             offsets = {
@@ -546,7 +540,7 @@ class WarehouseSim:
             )
 
     # -------------------------------------------------------------------------
-    # LiDAR 2D simulado para el Husky
+    # Simulated 2D LiDAR for the Husky
     # -------------------------------------------------------------------------
 
     def simulate_lidar_2d(
@@ -557,19 +551,19 @@ class WarehouseSim:
         fov_deg: float = 180.0
     ) -> Tuple[np.ndarray, np.ndarray]:
         """
-        Simula un LiDAR 2D muy simplificado.
+        Simulates a very simplified 2D LiDAR.
 
-        Retorna:
-            angles: ángulos relativos al robot [rad]
-            ranges: distancia estimada [m]
+        Returns:
+            angles: angles relative to the robot [rad]
+            ranges: estimated distance [m]
 
-        Modelo simplificado:
-        - solo detecta intersección aproximada con cajas grandes
-        - usa el centro de cada caja y un radio equivalente
-        - suficiente para planner local simple del reto
+        Simplified model:
+        - only detects approximate intersection with large boxes
+        - uses the center of each box and an equivalent radius
+        - sufficient for a simple local planner for the challenge
         """
         if robot_name not in self.robots:
-            raise KeyError(f"Robot '{robot_name}' no existe.")
+            raise KeyError(f"Robot '{robot_name}' does not exist.")
 
         robot = self.robots[robot_name]
         half_fov = math.radians(fov_deg / 2.0)
@@ -592,10 +586,10 @@ class WarehouseSim:
                 if proj <= 0:
                     continue
 
-                # Distancia perpendicular del centro de caja al rayo
+                # Perpendicular distance from the box center to the ray
                 perp = abs(vx * dy_beam - vy * dx_beam)
 
-                # Radio equivalente de caja como círculo de colisión
+                # Equivalent box radius as a collision circle
                 eq_radius = 0.5 * math.hypot(box.w, box.h)
 
                 if perp <= eq_radius:
@@ -604,9 +598,9 @@ class WarehouseSim:
                         ranges[i] = hit_range
 
         return angles, ranges
-    
+
     # -------------------------------------------------------------------------
-    # Cámara RGB sintética
+    # Synthetic RGB camera
     # -------------------------------------------------------------------------
 
     def render_camera(
@@ -618,26 +612,26 @@ class WarehouseSim:
         W, H = img_size
 
         # ============================================================
-        # imagen fondo
+        # background image
         # ============================================================
 
         frame = np.ones((H, W, 3), dtype=np.uint8) * 240
 
         # ============================================================
-        # dimensiones REALES del mundo
+        # REAL world dimensions
         # ============================================================
 
         world_w = self.world_xmax - self.world_xmin
         world_h = self.world_ymax - self.world_ymin
 
         # ============================================================
-        # ESCALA ÚNICA
-        # (MISMA para x e y)
+        # SINGLE SCALE
+        # (SAME for x and y)
         # ============================================================
 
         scale = min(W / world_w, H / world_h)
 
-        # centrar mundo en imagen
+        # center world in image
         x_offset = (W - scale * world_w) / 2
         y_offset = (H - scale * world_h) / 2
 
@@ -680,7 +674,7 @@ class WarehouseSim:
             cv2.line(frame, p1, p2, (220,220,220), 1)
 
         # ============================================================
-        # zonas principales
+        # main zones
         # ============================================================
 
         for rect, color in [
@@ -705,7 +699,7 @@ class WarehouseSim:
             )
 
         # ============================================================
-        # cajas
+        # boxes
         # ============================================================
 
         for box in self.boxes.values():
@@ -766,7 +760,7 @@ class WarehouseSim:
                 -1
             )
 
-            # orientación
+            # orientation
             ux = int(
                 u + 1.5 * radius_px * math.cos(r.theta)
             )
@@ -786,7 +780,7 @@ class WarehouseSim:
         return frame
 
     # -------------------------------------------------------------------------
-    # Contacto simple robot-caja
+    # Simple robot-box contact
     # -------------------------------------------------------------------------
 
     def push_box_if_contact(
@@ -796,14 +790,14 @@ class WarehouseSim:
         push_distance: float
     ) -> bool:
         """
-        Modelo simplificado de empuje.
+        Simplified push model.
 
-        Si el robot está suficientemente cerca de una caja, la empuja en la dirección
-        de su orientación actual.
+        If the robot is close enough to a box, it pushes it in the direction
+        of its current orientation.
 
-        Retorna:
-            True si hubo contacto y movimiento de caja
-            False en caso contrario
+        Returns:
+            True if there was contact and box movement
+            False otherwise
         """
         robot = self.robots[robot_name]
         box = self.boxes[box_name]
@@ -821,11 +815,11 @@ class WarehouseSim:
         return False
 
     # -------------------------------------------------------------------------
-    # Visualización
+    # Visualization
     # -------------------------------------------------------------------------
 
     def _draw_robot(self, ax, robot: RobotState) -> None:
-        """Dibuja un robot como círculo con flecha de orientación."""
+        """Draws a robot as a circle with an orientation arrow."""
         if not robot.active:
             return
 
@@ -866,38 +860,38 @@ class WarehouseSim:
         )
 
     def _draw_static_map(self, ax) -> None:
-        """Dibuja zonas fijas del escenario."""
-        # Zona de inicio
+        """Draws the fixed zones of the scenario."""
+        # Start zone
         x, y, w, h = self.start_zone
         ax.add_patch(Rectangle((x, y), w, h, fill=False, linestyle="--",
                                linewidth=2.0, edgecolor="tab:green"))
-        ax.text(x + 0.05, y + h + 0.08, "ZONA DE INICIO", color="tab:green",
+        ax.text(x + 0.05, y + h + 0.08, "START ZONE", color="tab:green",
                 fontsize=10, fontweight="bold")
 
-        # Corredor
+        # Corridor
         x, y, w, h = self.corridor
         ax.add_patch(Rectangle((x, y), w, h, fill=False, linestyle="-",
                                linewidth=2.5, edgecolor="dimgray"))
-        ax.text(x + 0.05, y + h + 0.08, "CORREDOR (6x2 m)", color="dimgray",
+        ax.text(x + 0.05, y + h + 0.08, "CORRIDOR (6x2 m)", color="dimgray",
                 fontsize=10, fontweight="bold")
 
-        # Zona de trabajo
+        # Work zone
         x, y, w, h = self.work_zone
         ax.add_patch(Rectangle((x, y), w, h, fill=False, linestyle="--",
                                linewidth=2.0, edgecolor="tab:blue"))
-        ax.text(x + 0.05, y + h + 0.08, "ZONA DE TRABAJO", color="tab:blue",
+        ax.text(x + 0.05, y + h + 0.08, "WORK ZONE", color="tab:blue",
                 fontsize=10, fontweight="bold")
 
-        # Objetivo ANYmal
+        # ANYmal goal
         gx, gy = self.anymal_goal
         ax.plot(gx, gy, marker="*", markersize=14, color="tab:red")
         ax.text(gx + 0.1, gy + 0.08, "p_dest ANYmal", color="tab:red",
                 fontsize=9, fontweight="bold")
 
-        # Punto de apilado
+        # Stacking point
         sx, sy = self.stack_point
         ax.plot(sx, sy, marker="s", markersize=10, color="black")
-        ax.text(sx + 0.1, sy + 0.08, "pila destino", color="black",
+        ax.text(sx + 0.1, sy + 0.08, "destination stack", color="black",
                 fontsize=9, fontweight="bold")
 
     def draw_world(
@@ -909,13 +903,13 @@ class WarehouseSim:
         lidar_robot_name: str = "husky"
     ):
         """
-        Dibuja el estado actual del mundo.
+        Draws the current state of the world.
 
-        Parámetros:
-            ax: eje existente o None
-            phase: texto de fase actual
-            note: nota descriptiva
-            show_lidar: dibuja haces del LiDAR
+        Parameters:
+            ax: existing axis or None
+            phase: current phase text
+            note: descriptive note
+            show_lidar: draws LiDAR beams
         """
         created_fig = False
         if ax is None:
@@ -931,11 +925,11 @@ class WarehouseSim:
         ax.grid(True, alpha=0.25)
         ax.set_xlabel("x [m]")
         ax.set_ylabel("y [m]")
-        ax.set_title(f"{self.title} | Fase: {phase}")
+        ax.set_title(f"{self.title} | Phase: {phase}")
 
         self._draw_static_map(ax)
 
-        # Dibujar cajas
+        # Draw boxes
         for box in self.boxes.values():
             patch = box.as_patch()
             ax.add_patch(patch)
@@ -943,11 +937,11 @@ class WarehouseSim:
             ax.text(cx, cy, box.name, ha="center", va="center",
                     fontsize=9, fontweight="bold", color="white")
 
-        # Dibujar robots
+        # Draw robots
         for robot in self.robots.values():
             self._draw_robot(ax, robot)
 
-        # LiDAR opcional
+        # Optional LiDAR
         if show_lidar and lidar_robot_name in self.robots:
             robot = self.robots[lidar_robot_name]
             angles, ranges = self.simulate_lidar_2d(robot_name=lidar_robot_name)
@@ -959,7 +953,7 @@ class WarehouseSim:
                 ax.plot([robot.x, bx], [robot.y, by], color="orange",
                         alpha=0.15, linewidth=1.0)
 
-        # Texto informativo
+        # Informative text
         info_lines = [
             f"t = {self.time:.2f} s",
             f"phase = {phase}",
@@ -992,7 +986,7 @@ class WarehouseSim:
         return ax
 
     # -------------------------------------------------------------------------
-    # Animación desde el log
+    # Animation from the log
     # -------------------------------------------------------------------------
 
     def animate_log(
@@ -1001,20 +995,20 @@ class WarehouseSim:
         save_path: Optional[str] = None
     ) -> FuncAnimation:
         """
-        Genera una animación matplotlib a partir del log del mundo.
+        Generates a matplotlib animation from the world log.
 
-        Requisitos:
-            primero haber llenado self.log con snapshots.
+        Requirements:
+            self.log must already be filled with snapshots.
         """
         if len(self.log.t) == 0:
-            raise RuntimeError("No hay datos en el log. Llama record_state() durante la simulación.")
+            raise RuntimeError("No data in the log. Call record_state() during the simulation.")
 
         fig, ax = plt.subplots(figsize=(12, 6))
 
         def update(frame_idx: int):
             ax.clear()
 
-            # Restaurar snapshot
+            # Restore snapshot
             robot_snapshot = self.log.robot_states[frame_idx]
             box_snapshot = self.log.box_states[frame_idx]
             phase = self.log.phase[frame_idx]
@@ -1039,37 +1033,37 @@ class WarehouseSim:
         )
 
         if save_path:
-            # Requiere ffmpeg o pillow según el formato
+            # Requires ffmpeg or pillow depending on the format
             anim.save(save_path, dpi=120)
 
         return anim
 
 
 # =============================================================================
-# Demo local de prueba del simulador
+# Local test demo of the simulator
 # =============================================================================
 
 def demo_sim() -> WarehouseSim:
     """
-    Demo mínima para verificar que el mapa y el log funcionan.
-    No resuelve el reto; solo prueba el escenario.
+    Minimal demo to verify that the map and the log work.
+    Does not solve the challenge; it only tests the scenario.
     """
     sim = WarehouseSim(dt=0.1)
 
-    # Guardar estado inicial
-    sim.record_state(phase="init", note="Estado inicial del escenario")
+    # Save initial state
+    sim.record_state(phase="init", note="Initial scenario state")
 
-    # Mover ligeramente al Husky
+    # Move the Husky slightly
     for _ in range(10):
         sim.move_robot_by("husky", dx=0.08, dy=0.0, dtheta=0.01)
-        sim.step(phase="demo_husky", note="Prueba básica de movimiento")
+        sim.step(phase="demo_husky", note="Basic movement test")
 
-    # Activar PuzzleBots en la zona de trabajo
+    # Activate PuzzleBots in the work zone
     sim.activate_puzzlebots_at_work_zone()
-    sim.record_state(phase="demo_deploy", note="Despliegue de PuzzleBots")
+    sim.record_state(phase="demo_deploy", note="PuzzleBot deployment")
 
     # ============================================================
-    # visualización simultánea
+    # simultaneous visualization
     # ============================================================
 
     plt.ion()
@@ -1079,7 +1073,7 @@ def demo_sim() -> WarehouseSim:
     for k in range(400):
 
         # ========================================================
-        # mover robot SOLO demo
+        # move robot DEMO ONLY
         # ========================================================
 
         sim.move_robot_by(
@@ -1091,17 +1085,17 @@ def demo_sim() -> WarehouseSim:
 
         sim.step(
             phase="camera_demo",
-            note="Demo cámara en tiempo real"
+            note="Real-time camera demo"
         )
 
         # ========================================================
-        # actualizar simulador matplotlib
+        # update matplotlib simulator
         # ========================================================
 
         sim.draw_world(
             ax=ax,
             phase="camera_demo",
-            note="Vista global",
+            note="Global view",
             show_lidar=False
         )
 
@@ -1109,7 +1103,7 @@ def demo_sim() -> WarehouseSim:
         fig.canvas.flush_events()
 
         # ========================================================
-        # actualizar cámara OpenCV
+        # update OpenCV camera
         # ========================================================
 
         frame = sim.render_camera("husky")
