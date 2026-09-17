@@ -25,11 +25,14 @@ Course: **TE3002B – Ground Mobile Robots**
 
 ```
 .
-├── sim.py                # World simulator (scenario, robots, boxes)
-├── coordinator.py       # Orchestrator for the whole mission
-├── husky_pusher.py      # Husky control
-├── anymal_gait.py       # ANYmal control
-├── puzzlebot_arm.py     # PuzzleBot manipulator arm
+├── src/
+│   ├── sim.py                # World simulator (scenario, robots, boxes)
+│   ├── coordinator.py        # Orchestrator for the whole mission
+│   ├── husky_pusher.py       # Husky control
+│   ├── anymal_gait.py        # ANYmal control
+│   └── puzzlebot_arm.py      # PuzzleBot manipulator arm
+├── plots/                    # Reference output plots
+└── requirements.txt
 ```
 
 ---
@@ -90,7 +93,7 @@ pip install numpy matplotlib scikit-learn opencv-python
 Run directly:
 
 ```bash
-python coordinator.py
+python src/coordinator.py
 ```
 
 This will:
@@ -102,7 +105,7 @@ This will:
 You can also run the standalone simulator demo (live matplotlib view + synthetic camera window):
 
 ```bash
-python sim.py
+python src/sim.py
 ```
 
 ---
