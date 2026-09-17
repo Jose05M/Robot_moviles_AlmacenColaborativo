@@ -31,6 +31,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Dict, List, Tuple, Optional
 import math
+import cv2
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle, Circle, FancyArrowPatch
@@ -603,6 +604,186 @@ class WarehouseSim:
                         ranges[i] = hit_range
 
         return angles, ranges
+    
+    # -------------------------------------------------------------------------
+    # Cámara RGB sintética
+    # -------------------------------------------------------------------------
+
+    def render_camera(
+        self,
+        robot_name: str = "husky",
+        img_size=(1280, 720)
+    ):
+
+        W, H = img_size
+
+        # ============================================================
+        # imagen fondo
+        # ============================================================
+
+        frame = np.ones((H, W, 3), dtype=np.uint8) * 240
+
+        # ============================================================
+        # dimensiones REALES del mundo
+        # ============================================================
+
+        world_w = self.world_xmax - self.world_xmin
+        world_h = self.world_ymax - self.world_ymin
+
+        # ============================================================
+        # ESCALA ÚNICA
+        # (MISMA para x e y)
+        # ============================================================
+
+        scale = min(W / world_w, H / world_h)
+
+        # centrar mundo en imagen
+        x_offset = (W - scale * world_w) / 2
+        y_offset = (H - scale * world_h) / 2
+
+        # ============================================================
+        # world -> image
+        # ============================================================
+
+        def world_to_camera(px, py):
+
+            u = int(
+                x_offset +
+                (px - self.world_xmin) * scale
+            )
+
+            v = int(
+                H - (
+                    y_offset +
+                    (py - self.world_ymin) * scale
+                )
+            )
+
+            return u, v
+
+        # ============================================================
+        # GRID
+        # ============================================================
+
+        for gx in np.arange(self.world_xmin, self.world_xmax, 0.5):
+
+            p1 = world_to_camera(gx, self.world_ymin)
+            p2 = world_to_camera(gx, self.world_ymax)
+
+            cv2.line(frame, p1, p2, (220,220,220), 1)
+
+        for gy in np.arange(self.world_ymin, self.world_ymax, 0.5):
+
+            p1 = world_to_camera(self.world_xmin, gy)
+            p2 = world_to_camera(self.world_xmax, gy)
+
+            cv2.line(frame, p1, p2, (220,220,220), 1)
+
+        # ============================================================
+        # zonas principales
+        # ============================================================
+
+        for rect, color in [
+
+            (self.start_zone, (0,180,0)),
+            (self.corridor, (120,120,120)),
+            (self.work_zone, (180,80,0)),
+
+        ]:
+
+            x, y, w, h = rect
+
+            p1 = world_to_camera(x, y)
+            p2 = world_to_camera(x+w, y+h)
+
+            cv2.rectangle(
+                frame,
+                p1,
+                p2,
+                color,
+                3
+            )
+
+        # ============================================================
+        # cajas
+        # ============================================================
+
+        for box in self.boxes.values():
+
+            p1 = world_to_camera(box.x, box.y)
+            p2 = world_to_camera(box.x + box.w, box.y + box.h)
+
+            if box.kind == "large":
+                color = (19,69,139)
+            else:
+                color = (0,140,255)
+
+            cv2.rectangle(
+                frame,
+                p1,
+                p2,
+                color,
+                -1
+            )
+
+            cx, cy = box.center()
+
+            tx, ty = world_to_camera(cx, cy)
+
+            cv2.putText(
+                frame,
+                box.name,
+                (tx-10, ty+5),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.6,
+                (255,255,255),
+                2
+            )
+
+        # ============================================================
+        # robots
+        # ============================================================
+
+        for name, r in self.robots.items():
+
+            if not r.active:
+                continue
+
+            u, v = world_to_camera(r.x, r.y)
+
+            radius_px = int(r.radius * scale)
+
+            if name == robot_name:
+                color = (0,0,255)
+            else:
+                color = (0,255,0)
+
+            cv2.circle(
+                frame,
+                (u,v),
+                radius_px,
+                color,
+                -1
+            )
+
+            # orientación
+            ux = int(
+                u + 1.5 * radius_px * math.cos(r.theta)
+            )
+
+            vy = int(
+                v - 1.5 * radius_px * math.sin(r.theta)
+            )
+
+            cv2.arrowedLine(
+                frame,
+                (u,v),
+                (ux,vy),
+                (0,0,0),
+                3
+            )
+
+        return frame
 
     # -------------------------------------------------------------------------
     # Contacto simple robot-caja
@@ -887,10 +1068,65 @@ def demo_sim() -> WarehouseSim:
     sim.activate_puzzlebots_at_work_zone()
     sim.record_state(phase="demo_deploy", note="Despliegue de PuzzleBots")
 
-    # Mostrar snapshot final
-    sim.draw_world(phase="demo_final", note="Snapshot final del demo", show_lidar=True)
-    plt.tight_layout()
-    plt.show()
+    # ============================================================
+    # visualización simultánea
+    # ============================================================
+
+    plt.ion()
+
+    fig, ax = plt.subplots(figsize=(12,6))
+
+    for k in range(400):
+
+        # ========================================================
+        # mover robot SOLO demo
+        # ========================================================
+
+        sim.move_robot_by(
+            "husky",
+            dx=0.01,
+            dy=0.0,
+            dtheta=0.01
+        )
+
+        sim.step(
+            phase="camera_demo",
+            note="Demo cámara en tiempo real"
+        )
+
+        # ========================================================
+        # actualizar simulador matplotlib
+        # ========================================================
+
+        sim.draw_world(
+            ax=ax,
+            phase="camera_demo",
+            note="Vista global",
+            show_lidar=False
+        )
+
+        fig.canvas.draw()
+        fig.canvas.flush_events()
+
+        # ========================================================
+        # actualizar cámara OpenCV
+        # ========================================================
+
+        frame = sim.render_camera("husky")
+
+        cv2.imshow(
+            "Husky Camera",
+            frame
+        )
+
+        key = cv2.waitKey(30)
+
+        if key == 27:
+            break
+
+    plt.ioff()
+
+    cv2.destroyAllWindows()
 
     return sim
 

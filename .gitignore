@@ -1,0 +1,5 @@
+__pycache__/
+*.pyc
+
+# Imagenes regeneradas al correr los scripts en codes/ (ver plots/ para las de referencia)
+codes/*.png

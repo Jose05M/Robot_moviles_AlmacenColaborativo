@@ -410,7 +410,7 @@ class MissionCoordinator:
             if robot_name == active_robot:
                 continue
 
-            # 🔥 NO mover robots que ya terminaron
+            # NO mover robots que ya terminaron
             if self.pb_status.get(robot_name) == "DONE":
                 continue
 
@@ -574,31 +574,42 @@ class MissionCoordinator:
                 if other == robot_name:
                     continue
 
-                x2, y2, _ = self.pb_mobile[other].get_pose()
+                x2, y2, th2 = self.pb_mobile[other].get_pose()
 
+                # features para ML
                 dist = math.hypot(x - x2, y - y2)
 
-                d_safe = 0.6
-                d_crit = 0.25
+                log1 = self.pb_mobile[robot_name].motion_log
+                log2 = self.pb_mobile[other].motion_log
 
-                if dist < d_safe:
-                    # riesgo continuo
-                    risk = (d_safe - dist) / (d_safe - d_crit)
-                    risk = np.clip(risk, 0.0, 1.0)
+                v1 = log1['v'][-1] if log1['v'] else 0.0
+                v2 = log2['v'][-1] if log2['v'] else 0.0
 
-                    # dirección de repulsión
+                dv = abs(v1 - v2)
+
+                dtheta = abs(wrap_angle(theta - th2))
+
+                X_ml = np.array([[dist, dv, dtheta]])
+
+                # regresión logística
+                risk_prob = self.collision_model.predict_proba(X_ml)[0][1]
+
+                # decisión usando ML
+                if risk_prob > 0.5:
+
                     rx = x - x2
                     ry = y - y2
 
                     norm = math.hypot(rx, ry)
+
                     if norm > 1e-6:
                         rx /= norm
                         ry /= norm
 
-                        avoid_x += risk * rx
-                        avoid_y += risk * ry
+                        avoid_x += risk_prob * rx
+                        avoid_y += risk_prob * ry
 
-                    print(f"[ML] {robot_name} evita robot {other} | risk={risk:.2f}")
+                    print(f"[ML] {robot_name} vs {other} -> riesgo={risk_prob:.2f}")
 
             # -------- CAJAS --------
             for box_name, box in self.sim.boxes.items():
@@ -706,7 +717,7 @@ class MissionCoordinator:
             dx /= dist
             dy /= dist
 
-        # 🔥 offset lateral (lado de entrada)
+        # offset lateral (lado de entrada)
         side_offset = 0.35
 
         # perpendicular
