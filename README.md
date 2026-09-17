@@ -1,62 +1,65 @@
-# Mini Reto – Almacén Colaborativo
+# Mini Challenge – Collaborative Warehouse
 
-Simulación 2D de un sistema multi-robot donde:
+2D simulation of a multi-robot system where:
 
-* Un **Husky** despeja un corredor empujando cajas
-* Un **ANYmal** cruza el corredor
-* Tres **PuzzleBots** apilan cajas en orden **C → B → A**
+* A **Husky** clears a corridor by pushing boxes
+* An **ANYmal** crosses the corridor
+* Three **PuzzleBots** stack boxes in order **C → B → A**
 
 ---
 
-# Estructura del proyecto
+# Project structure
 
 ```
 .
-├── sim.py                # Simulador del mundo (escenario, robots, cajas)
-├── coordinator.py       # Orquestador de toda la misión
-├── husky_pusher.py      # Control del Husky
-├── anymal_gait.py       # Control de ANYmal
-├── puzzlebot_arm.py     # Brazo manipulador PuzzleBot
+├── src/
+│   ├── sim.py                # World simulator (scenario, robots, boxes)
+│   ├── coordinator.py        # Orchestrator for the whole mission
+│   ├── husky_pusher.py       # Husky control
+│   ├── anymal_gait.py        # ANYmal control
+│   └── puzzlebot_arm.py      # PuzzleBot manipulator arm
+├── plots/                    # Reference output plots
+└── requirements.txt
 ```
 
 ---
 
-# Descripción general
+# Overview
 
 ## sim.py
 
-Este archivo define el entorno completo:
+This file defines the complete environment:
 
-* Mapa del almacén
+* Warehouse map
 * Robots (Husky, ANYmal, PuzzleBots)
-* Cajas (grandes y pequeñas)
-* Física simplificada (empuje, distancias)
-* Simulación de LiDAR
-* Visualización y animación
+* Boxes (large and small)
+* Simplified physics (pushing, distances)
+* LiDAR simulation
+* Visualization and animation
 
 ---
 
 ## coordinator.py
 
-Este archivo coordina toda la misión en 3 fases:
+This file coordinates the whole mission in 3 phases:
 
 1. **HUSKY_PHASE**
 
-   * Despeja el corredor
+   * Clears the corridor
 
 2. **ANYMAL_PHASE**
 
-   * Cruza el corredor
+   * Crosses the corridor
 
 3. **PUZZLEBOT_PHASE**
 
-   * Apila cajas en orden: C (abajo), B (medio), A (arriba)
+   * Stacks boxes in order: C (bottom), B (middle), A (top)
 
 ---
 
-# Requisitos
+# Requirements
 
-Instala dependencias:
+Install dependencies:
 
 ```bash
 pip install numpy matplotlib
@@ -64,59 +67,59 @@ pip install numpy matplotlib
 
 ---
 
-# Cómo ejecutar
+# How to run
 
-Ejecuta directamente:
+Run directly:
 
 ```bash
-python coordinator.py
+python src/coordinator.py
 ```
 
-Esto hará:
+This will:
 
-* Correr toda la misión automáticamente
-* Mostrar gráficas
-* Mostrar animación final
+* Run the whole mission automatically
+* Show plots
+* Show the final animation
 
 ---
 
-# Qué se genera
+# Output
 
-* Gráficas por fase:
+* Per-phase plots:
 
   * Husky
   * ANYmal
   * PuzzleBots
-* Resumen global del sistema
-* Animación del escenario completo
+* Global system summary
+* Full scenario animation
 
 ---
 
-# Modulos de software
+# Software modules
 
 ## husky_pusher.py
 
-Controla:
+Controls:
 
-* Navegación del Husky
-* Empuje de cajas grandes
+* Husky navigation
+* Pushing large boxes
 
 ---
 
 ## anymal_gait.py
 
-Controla:
+Controls:
 
-* Movimiento del ANYmal (marcha tipo trote)
-* Cinemática / trayectoria
+* ANYmal locomotion (trot gait)
+* Kinematics / trajectory
 
 ---
 
 ## puzzlebot_arm.py
 
-Controla:
+Controls:
 
-* Brazo manipulador de 3 DOF
-* Grasp y colocación de cajas
+* 3-DOF manipulator arm
+* Grasping and placing boxes
 
 ---

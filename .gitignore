@@ -1,0 +1,5 @@
+__pycache__/
+*.pyc
+
+# Images regenerated when running the scripts in src/ (see plots/ for the reference ones)
+src/*.png
